@@ -51,7 +51,12 @@ class GrokRunnerTest(unittest.TestCase):
             observed["env"] = kwargs["env"]
             return SimpleNamespace(
                 returncode=0,
-                stdout=json.dumps({"structuredOutput": {"ok": True}, "text": "{}"}),
+                stdout=json.dumps(
+                    {
+                        "structuredOutput": {"ok": False},
+                        "text": 'note {"ok": true}',
+                    }
+                ),
                 stderr="",
             )
 
@@ -68,9 +73,10 @@ class GrokRunnerTest(unittest.TestCase):
                 cli_version="1.0.5",
             ).invoke(prompt="prove it", schema={"type": "object"})
         self.assertEqual(result, {"ok": True})
-        self.assertIn("--json-schema", observed["command"])
-        self.assertIn("--verbatim", observed["command"])
+        self.assertNotIn("--json-schema", observed["command"])
+        self.assertNotIn("--verbatim", observed["command"])
         self.assertIn("--disable-web-search", observed["command"])
+        self.assertIn("--max-turns", observed["command"])
         self.assertNotIn("FACTORY_PASSWORD", observed["env"])
         self.assertEqual(observed["env"]["HOME"], "/tmp/workshop-home")
 
@@ -106,6 +112,27 @@ class GrokRunnerTest(unittest.TestCase):
         self.assertNotIn("--verbatim", observed["command"])
         self.assertNotIn("--disable-web-search", observed["command"])
         self.assertIn("--always-approve", observed["command"])
+
+    def test_prefers_largest_text_object_and_promotes_json_ints(self):
+        payload = GrokStructuredRunner(
+            model="grok-4.6",
+            reasoning_effort="low",
+            binary="/fixture/grok",
+            runner=lambda *args, **kwargs: SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "structuredOutput": {"ok": False},
+                        "text": '{"skip": true} note {"ok": true, "axis_direction": [0, 0, 1], "start_deg": 0}',
+                    }
+                ),
+                stderr="",
+            ),
+            cli_version="1.0.5",
+        ).invoke(prompt="prove it", schema={"type": "object"})
+        self.assertEqual(payload["ok"], True)
+        self.assertEqual(payload["axis_direction"], [0.0, 0.0, 1.0])
+        self.assertEqual(payload["start_deg"], 0.0)
 
     def test_rejects_codex_model_names(self):
         with self.assertRaises(ContractError):

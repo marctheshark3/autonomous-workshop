@@ -1033,7 +1033,10 @@ def _validate_moving_binding_action(
         or not isinstance(axis_point, list)
         or len(axis_point) != 3
         or not all(_number(item) for item in axis_point)
-        or joint.get("axis_direction") != [0.0, 0.0, 1.0]
+        or not isinstance(joint.get("axis_direction"), list)
+        or len(joint["axis_direction"]) != 3
+        or not all(_number(item) for item in joint["axis_direction"])
+        or tuple(float(item) for item in joint["axis_direction"]) != (0.0, 0.0, 1.0)
         or not _number(joint.get("start_deg"))
         or float(joint["start_deg"]) != 0.0
         or not _number(joint.get("end_deg"))

@@ -119,15 +119,27 @@ class GrokStructuredRunner:
         with tempfile.TemporaryDirectory(prefix="workshop-grok-") as temporary:
             control_root = Path(temporary)
             prompt_path = control_root / "prompt.txt"
-            if native_web_search:
-                written = (
-                    prompt
-                    + "\nReturn only JSON matching this schema.\nSCHEMA:\n"
-                    + json.dumps(schema, sort_keys=True)
+            # Grok --json-schema fills on turn 1. Match still schema-locks in
+            # semantic.py. Invent/Make get the schema in the prompt and we parse.
+            suffix = (
+                "\nReturn only JSON matching this schema.\nSCHEMA:\n"
+                + json.dumps(schema, sort_keys=True)
+            )
+            if "moving_machine_binding" in suffix:
+                suffix += (
+                    "\nMOVING-MACHINE BINDING:\n"
+                    "- axis_direction must be [0.0, 0.0, 1.0].\n"
+                    "- start_deg 0.0; end_deg equals motion_spec.sweep_degrees.\n"
+                    "- support_part_ids and obstacle_part_ids partition every "
+                    "part_id except moving_part_id (disjoint, complete).\n"
+                    "- tolerance stationary_part_ids must be a subset of "
+                    "obstacle_part_ids only — never supports, never the mover.\n"
+                    "- verification must be continuous-swept-envelope.\n"
+                    "- Prefer 2-6 box/cylinder parts.\n"
+                    "- Every part has top_grooves_mm. Cylinders use []. "
+                    "Boxes use [] unless Invent needs real tactile seams.\n"
                 )
-            else:
-                written = prompt
-            prompt_path.write_text(written, encoding="utf-8")
+            prompt_path.write_text(prompt + suffix, encoding="utf-8")
             cwd = Path(workspace).resolve() if workspace is not None else control_root
             cwd.mkdir(parents=True, exist_ok=True)
             command = [
@@ -144,20 +156,17 @@ class GrokStructuredRunner:
                 self.reasoning_effort,
                 "-m",
                 self.model,
+                "--max-turns",
+                "8",
             ]
             if native_web_search:
-                command.extend(("--always-approve", "--max-turns", "8"))
+                command.append("--always-approve")
             else:
                 command.extend(
                     (
-                        "--json-schema",
-                        json.dumps(schema, sort_keys=True, separators=(",", ":")),
                         "--permission-mode",
                         "dontAsk",
-                        "--verbatim",
                         "--disable-web-search",
-                        "--max-turns",
-                        "1",
                     )
                 )
             return self._runner(
@@ -171,13 +180,68 @@ class GrokStructuredRunner:
 
 
 def _first_json_object(text: str) -> Mapping[str, Any]:
-    start = text.find("{")
-    if start < 0:
+    decoder = json.JSONDecoder()
+    best = None
+    best_span = -1
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            payload, end = decoder.raw_decode(text[index:])
+        except ValueError:
+            continue
+        if isinstance(payload, dict) and end > best_span:
+            best = payload
+            best_span = end
+    if best is None:
         raise ValueError("no object")
-    payload, _end = json.JSONDecoder().raw_decode(text[start:])
-    if not isinstance(payload, dict):
-        raise ValueError("not an object")
-    return payload
+    return best
+
+
+_FLOAT_KEYS = frozenset(
+    (
+        "start_deg",
+        "end_deg",
+        "minimum_aabb_clearance_mm",
+        "print_rotation_deg",
+        "assembly_rotation_deg",
+    )
+)
+_FLOAT_VEC_KEYS = frozenset(
+    (
+        "axis_direction",
+        "axis_point_mm",
+        "size_mm",
+        "print_center_mm",
+        "assembly_center_mm",
+    )
+)
+
+
+def _normalize_workshop_numbers(value: Any) -> Any:
+    if isinstance(value, dict):
+        if value.get("shape") == "cylinder":
+            value = {**value, "top_grooves_mm": []}
+        normalized = {}
+        for key, item in value.items():
+            if key in _FLOAT_KEYS and isinstance(item, (int, float)):
+                normalized[key] = float(item)
+            elif key in _FLOAT_VEC_KEYS and isinstance(item, list):
+                normalized[key] = [
+                    float(entry) if isinstance(entry, (int, float)) else entry
+                    for entry in item
+                ]
+            elif key in _FLOAT_VEC_KEYS and isinstance(item, dict):
+                normalized[key] = {
+                    axis: float(entry) if isinstance(entry, (int, float)) else entry
+                    for axis, entry in item.items()
+                }
+            else:
+                normalized[key] = _normalize_workshop_numbers(item)
+        return normalized
+    if isinstance(value, list):
+        return [_normalize_workshop_numbers(item) for item in value]
+    return value
 
 
 def _decode_grok_payload(encoded: bytes) -> Mapping[str, Any]:
@@ -189,18 +253,18 @@ def _decode_grok_payload(encoded: bytes) -> Mapping[str, Any]:
         envelope = json.loads(encoded.decode("utf-8"))
     except (UnicodeError, ValueError):
         raise CodexInvocationError("Grok returned no valid structured result") from None
-    if isinstance(envelope, dict) and isinstance(envelope.get("structuredOutput"), dict):
-        return envelope["structuredOutput"]
     if isinstance(envelope, dict) and isinstance(envelope.get("text"), str):
         try:
-            return _first_json_object(envelope["text"])
+            return _normalize_workshop_numbers(_first_json_object(envelope["text"]))
         except ValueError:
-            raise CodexInvocationError("Grok returned no valid structured result") from None
+            pass
+    if isinstance(envelope, dict) and isinstance(envelope.get("structuredOutput"), dict):
+        return _normalize_workshop_numbers(envelope["structuredOutput"])
     if isinstance(envelope, dict) and envelope.get("structuredOutput") is None:
         raise CodexInvocationError("Grok returned no valid structured result")
     if not isinstance(envelope, dict):
         raise CodexInvocationError("Grok structured result must be an object")
-    return envelope
+    return _normalize_workshop_numbers(envelope)
 
 
 __all__ = ["GrokStructuredRunner"]
