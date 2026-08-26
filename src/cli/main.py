@@ -72,6 +72,7 @@ from workshop.contributors import (
 )
 from workshop.artifacts.schema_registry import discover_schemas, resolve_schemas_root
 from workshop.make.skill_registry import discover_skills, resolve_skills_root
+from workshop.runtime.engine import detect_engine, worker_runtime_environment
 from workshop.runtime import InventorStore
 from workshop.integrations.shop import ShopDoor
 from workshop.contributors import load_taste, load_taste_header
@@ -85,6 +86,13 @@ _INVENTOR_ID_PART = re.compile(r"[^a-z0-9]+")
 _SHARED_ENGINE_ENVIRONMENT_NAMES = frozenset(
     (
         "WORKSHOP_CODEX_BIN",
+        "WORKSHOP_ENGINE",
+        "WORKSHOP_GROK_BIN",
+        "WORKSHOP_GROK_MODEL",
+        "WORKSHOP_HERMES_BIN",
+        "WORKSHOP_HERMES_MODEL",
+        "WORKSHOP_HERMES_PROVIDER",
+        "WORKSHOP_MANAGER_MODEL",
         "WORKSHOP_INVENT_MODEL",
         "WORKSHOP_REWARD_MODEL",
         "WORKSHOP_MAKE_MODEL",
@@ -354,26 +362,34 @@ class _ReadOnlyWorkshopStore:
         )
 
 
-def _inventor_process_environment(inventor_id: str) -> Mapping[str, str]:
+def _inventor_process_environment(
+    inventor_id: str, *, engine: Optional[str] = None
+) -> Mapping[str, str]:
     """Build a strict worker environment with no Factory or unrelated secrets.
 
-    An inventor entrypoint is contribution code. It receives the Codex runtime
-    inputs needed by shared Invent/Make/Playtest workers, but Factory authority
-    stays in the Workshop Manager process for the later Instructions handoff.
+    An inventor entrypoint is contribution code. It receives the coding-agent
+    runtime inputs needed by shared Invent/Make/Playtest workers, but Factory
+    authority stays in the Workshop Manager process for the later Instructions
+    handoff.
     """
 
     if not isinstance(inventor_id, str) or not inventor_id:
         raise WorkshopError("selected Inventor identity is malformed")
-    environment = dict(codex_subprocess_environment(os.environ))
+    source = dict(os.environ)
+    if engine:
+        source["WORKSHOP_ENGINE"] = engine
+    environment = dict(worker_runtime_environment(source))
     environment.update(
         {
             name: value
             for name in _SHARED_ENGINE_ENVIRONMENT_NAMES
-            if isinstance((value := os.environ.get(name)), str) and value
+            if isinstance((value := source.get(name)), str) and value
         }
     )
     environment["WORKSHOP_AGENT_WORKERS"] = "codex"
     environment["WORKSHOP_INVENT_WORKER"] = "codex"
+    if engine:
+        environment["WORKSHOP_ENGINE"] = engine
     return environment
 
 
@@ -722,6 +738,7 @@ def _resume_factory_instructions(
 def _run_inventor(
     assignment,
     *,
+    engine: Optional[str] = None,
     runner: Any = subprocess.run,
     state_validator: Any = _validate_child_workshop_state,
 ) -> Mapping[str, Any]:
@@ -735,7 +752,7 @@ def _run_inventor(
         completed = runner(
             command,
             cwd=str(assignment.decision.selected.card.root),
-            env=_inventor_process_environment(inventor_id),
+            env=_inventor_process_environment(inventor_id, engine=engine),
             input=json.dumps(
                 handoff.to_dict(),
                 sort_keys=True,
@@ -1835,6 +1852,12 @@ def _doctor(args: argparse.Namespace) -> int:
 def _wish(args: argparse.Namespace) -> int:
     root = _catalog_roots(args.root)[0]
     objective = " ".join(args.objective)
+    requested = (os.environ.get("WORKSHOP_ENGINE") or "auto").strip().lower()
+    engine = (
+        detect_engine({**os.environ, "WORKSHOP_ENGINE": "auto"})
+        if requested in ("", "auto")
+        else requested
+    )
     wish = Wish.create(
         generate_wish_id(),
         objective,
@@ -1842,6 +1865,7 @@ def _wish(args: argparse.Namespace) -> int:
     )
     progress = sys.stderr if args.json else sys.stdout
     print("Wish: %s" % wish.product_id, file=progress, flush=True)
+    print("Engine: %s" % engine, file=progress, flush=True)
     print(
         "Page: will be public after exact verification (--draft keeps it private)."
         if args.publish
@@ -1850,7 +1874,7 @@ def _wish(args: argparse.Namespace) -> int:
         flush=True,
     )
     print("Matching your Wish with an Inventor...", file=progress, flush=True)
-    semantic = CodexSemanticManager()
+    semantic = CodexSemanticManager(engine=engine)
     manager = WorkshopManager(
         root=root,
         retriever=semantic.retrieve,
@@ -1889,7 +1913,7 @@ def _wish(args: argparse.Namespace) -> int:
             file=progress,
             flush=True,
         )
-        result = _run_inventor(assignment)
+        result = _run_inventor(assignment, engine=engine)
         result = _resume_factory_instructions(assignment, result)
         if args.publish:
             result = {

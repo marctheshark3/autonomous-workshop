@@ -102,8 +102,8 @@ raise SystemExit(97)
             )
             fake_codex.chmod(0o700)
 
-            def child_environment(inventor_id):
-                environment = dict(_inventor_process_environment(inventor_id))
+            def child_environment(inventor_id, **kwargs):
+                environment = dict(_inventor_process_environment(inventor_id, **kwargs))
                 environment.pop("FACTORY_USERNAME", None)
                 environment.pop("FACTORY_PASSWORD", None)
                 environment["WORKSHOP_CODEX_BIN"] = str(fake_codex)

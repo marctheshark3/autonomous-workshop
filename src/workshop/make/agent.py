@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from workshop.product import attribute_product_description
 from workshop.runtime.codex import CodexInvocationError, CodexStructuredRunner
+from workshop.runtime.engine import structured_runner
 from workshop.errors import ContractError
 from workshop.runtime.execution import minimal_tool_environment
 from workshop.make.contracts import Made, MakeContext
@@ -2677,12 +2678,14 @@ class CodexMaker:
         goal: int = DEFAULT_MAKE_GOAL,
         max_steps: int = DEFAULT_MAKE_STEPS,
     ) -> None:
-        self.creator = creator or CodexStructuredRunner(
-            model=os.environ.get("WORKSHOP_MAKE_MODEL", DEFAULT_MAKE_MODEL),
+        self.creator = creator or structured_runner(
+            model=os.environ.get("WORKSHOP_MAKE_MODEL"),
+            default_codex_model=DEFAULT_MAKE_MODEL,
             reasoning_effort="low",
         )
-        self.evaluator = evaluator or CodexStructuredRunner(
-            model=os.environ.get("WORKSHOP_MAKE_REWARD_MODEL", DEFAULT_MAKE_REWARD_MODEL),
+        self.evaluator = evaluator or structured_runner(
+            model=os.environ.get("WORKSHOP_MAKE_REWARD_MODEL"),
+            default_codex_model=DEFAULT_MAKE_REWARD_MODEL,
             reasoning_effort="low",
         )
         self.cad_builder = cad_builder or LockedCadSkillBuilder()

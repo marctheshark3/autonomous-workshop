@@ -37,6 +37,40 @@ _CODEX_ENVIRONMENT_NAMES = frozenset(
         "SSL_CERT_DIR",
     )
 )
+_GROK_ENVIRONMENT_NAMES = frozenset(
+    (
+        "PATH",
+        "HOME",
+        "GROK_HOME",
+        "GROK_SANDBOX",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TERM",
+        "TMPDIR",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+    )
+)
+_HERMES_ENVIRONMENT_NAMES = frozenset(
+    (
+        "PATH",
+        "HOME",
+        "HERMES_HOME",
+        "HERMES_PROFILE",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TERM",
+        "TMPDIR",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+    )
+)
 
 
 def minimal_tool_environment() -> Mapping[str, str]:
@@ -63,11 +97,40 @@ def codex_subprocess_environment(
     """
 
     values = os.environ if source is None else source
+    return _allowlisted_environment(values, _CODEX_ENVIRONMENT_NAMES)
+
+
+def grok_subprocess_environment(
+    source: Optional[Mapping[str, str]] = None,
+) -> Mapping[str, str]:
+    """Keep Grok CLI login/runtime inputs; never Factory credentials."""
+
+    values = os.environ if source is None else source
+    return _allowlisted_environment(values, _GROK_ENVIRONMENT_NAMES)
+
+
+def hermes_subprocess_environment(
+    source: Optional[Mapping[str, str]] = None,
+) -> Mapping[str, str]:
+    """Keep Hermes runtime inputs; credentials stay in Hermes home, not env copy."""
+
+    values = os.environ if source is None else source
+    return _allowlisted_environment(values, _HERMES_ENVIRONMENT_NAMES)
+
+
+def _allowlisted_environment(
+    values: Mapping[str, str], names: frozenset[str]
+) -> Mapping[str, str]:
     return {
         name: value
-        for name in _CODEX_ENVIRONMENT_NAMES
+        for name in names
         if isinstance((value := values.get(name)), str) and value
     }
 
 
-__all__ = ["codex_subprocess_environment", "minimal_tool_environment"]
+__all__ = [
+    "codex_subprocess_environment",
+    "grok_subprocess_environment",
+    "hermes_subprocess_environment",
+    "minimal_tool_environment",
+]

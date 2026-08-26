@@ -13,7 +13,20 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
 from workshop.errors import ContractError
-from workshop.runtime.execution import codex_subprocess_environment
+from workshop.runtime.engine import (
+    ALLOWED_GROK_MODELS,
+    DEFAULT_GROK_MODEL,
+    DEFAULT_HERMES_MODEL,
+    DEFAULT_HERMES_PROVIDER,
+    configured_engine,
+    grok_binary,
+    hermes_binary,
+)
+from workshop.runtime.execution import (
+    codex_subprocess_environment,
+    grok_subprocess_environment,
+    hermes_subprocess_environment,
+)
 from workshop.outcomes import Need, WaitingFor
 from workshop.match.service import (
     MAX_PAGE_SIZE,
@@ -116,25 +129,34 @@ def _canonical_sha256(value: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _semantic_need(capability: str, reason: str) -> WaitingFor:
+def _semantic_need(capability: str, reason: str, *, engine: str = "codex") -> WaitingFor:
+    if engine == "grok":
+        login = (
+            "Install and sign in to the Grok CLI (`grok login`), then run this exact "
+            "Wish again. The Workshop will not replace semantic Taste matching with keywords."
+        )
+    elif engine == "hermes":
+        login = (
+            "Install Hermes and sign in to its inference provider, then run this exact "
+            "Wish again. The Workshop will not replace semantic Taste matching with keywords."
+        )
+    else:
+        login = (
+            "Install and sign in to the Codex CLI, then run this exact Wish again. "
+            "The Workshop will not replace semantic Taste matching with keywords."
+        )
     return WaitingFor(
         Need(
             job="wish",
             capability=capability,
             reason=reason,
-            instructions=(
-                "Install and sign in to the Codex CLI, then run this exact Wish again. "
-                "The Workshop will not replace semantic Taste matching with keywords."
-            ),
+            instructions=login,
         )
     )
 
 
 class CodexSemanticManager:
     """Shortlist on compact descriptions, then judge complete finalist Tastes."""
-
-    retriever_identity = "codex-cli-semantic-retriever"
-    judge_identity = "codex-cli-semantic-taste-judge"
 
     def __init__(
         self,
@@ -144,28 +166,52 @@ class CodexSemanticManager:
         timeout_seconds: int = 300,
         runner: Any = subprocess.run,
         cli_version: Optional[str] = None,
+        engine: Optional[str] = None,
     ) -> None:
-        self.binary = binary or os.environ.get("WORKSHOP_CODEX_BIN") or shutil.which("codex")
-        self.model = model or os.environ.get("WORKSHOP_MANAGER_MODEL") or DEFAULT_MANAGER_MODEL
-        if self.model not in _ALLOWED_MANAGER_MODELS:
-            raise ContractError(
-                "semantic Workshop Manager model must be gpt-5.6-terra or gpt-5.6-luna"
+        self.engine = engine or configured_engine()
+        if self.engine == "grok":
+            self.binary = binary or grok_binary()
+            self.model = model or os.environ.get("WORKSHOP_GROK_MODEL") or DEFAULT_GROK_MODEL
+            if self.model not in ALLOWED_GROK_MODELS:
+                raise ContractError("semantic Workshop Manager Grok model must be grok-4.6 or grok-4.5")
+            adapter = "grok-cli"
+            self.retriever_identity = "grok-cli-semantic-retriever"
+            self.judge_identity = "grok-cli-semantic-taste-judge"
+        elif self.engine == "hermes":
+            self.binary = binary or hermes_binary()
+            self.model = (
+                model or os.environ.get("WORKSHOP_HERMES_MODEL") or DEFAULT_HERMES_MODEL
             )
+            adapter = "hermes-cli"
+            self.retriever_identity = "hermes-cli-semantic-retriever"
+            self.judge_identity = "hermes-cli-semantic-taste-judge"
+        else:
+            self.binary = binary or os.environ.get("WORKSHOP_CODEX_BIN") or shutil.which("codex")
+            self.model = model or os.environ.get("WORKSHOP_MANAGER_MODEL") or DEFAULT_MANAGER_MODEL
+            if self.model not in _ALLOWED_MANAGER_MODELS:
+                raise ContractError(
+                    "semantic Workshop Manager model must be gpt-5.6-terra or gpt-5.6-luna"
+                )
+            adapter = "codex-cli"
+            self.retriever_identity = "codex-cli-semantic-retriever"
+            self.judge_identity = "codex-cli-semantic-taste-judge"
         self.timeout_seconds = timeout_seconds
         self._runner = runner
         self.cli_version = cli_version or self._read_cli_version()
-        self.retriever_version = "%s+codex.%s.%s" % (
+        self.retriever_version = "%s+%s.%s.%s" % (
             _RETRIEVER_PROMPT_VERSION,
+            adapter.split("-", 1)[0],
             self.cli_version,
             self.model,
         )
-        self.judge_version = "%s+codex.%s" % (
+        self.judge_version = "%s+%s.%s" % (
             _JUDGE_PROMPT_VERSION,
+            adapter.split("-", 1)[0],
             self.cli_version,
         )
         self.judge_config_sha256 = _canonical_sha256(
             {
-                "adapter": "codex-cli",
+                "adapter": adapter,
                 "cli_version": self.cli_version,
                 "model": self.model,
                 "reasoning_effort": "low",
@@ -173,6 +219,13 @@ class CodexSemanticManager:
                 "judge_schema": _JUDGE_SCHEMA,
             }
         )
+
+    def _cli_env(self) -> Mapping[str, str]:
+        if self.engine == "grok":
+            return grok_subprocess_environment()
+        if self.engine == "hermes":
+            return hermes_subprocess_environment()
+        return codex_subprocess_environment()
 
     def _read_cli_version(self) -> str:
         if not self.binary:
@@ -184,7 +237,7 @@ class CodexSemanticManager:
                 text=True,
                 timeout=10,
                 check=False,
-                env=codex_subprocess_environment(),
+                env=self._cli_env(),
             )
         except (OSError, subprocess.SubprocessError):
             return "0.0.0"
@@ -194,65 +247,170 @@ class CodexSemanticManager:
     def _invoke(
         self, *, prompt: str, schema: Mapping[str, Any], capability: str
     ) -> Mapping[str, Any]:
+        missing = {
+            "grok": "The Grok CLI is not installed or on PATH.",
+            "hermes": "The Hermes CLI is not installed or on PATH.",
+        }.get(self.engine, "The Codex CLI is not installed or on PATH.")
         if not self.binary:
-            raise _semantic_need(capability, "The Codex CLI is not installed or on PATH.")
+            raise _semantic_need(capability, missing, engine=self.engine)
         try:
             with tempfile.TemporaryDirectory(prefix="workshop-manager-") as temporary:
                 root = Path(temporary)
-                schema_path = root / "output.schema.json"
-                output_path = root / "output.json"
-                schema_path.write_text(
-                    json.dumps(schema, sort_keys=True), encoding="utf-8"
-                )
-                command = [
-                    self.binary,
-                    "exec",
-                    "--ephemeral",
-                    "--ignore-rules",
-                    "--skip-git-repo-check",
-                    "--sandbox",
-                    "read-only",
-                    "--color",
-                    "never",
-                    "--config",
-                    'model_reasoning_effort="low"',
-                    "--output-schema",
-                    str(schema_path),
-                    "--output-last-message",
-                    str(output_path),
-                    "-C",
-                    str(root),
-                ]
-                command.extend(("--model", self.model))
-                command.append("-")
-                completed = self._runner(
-                    command,
-                    input=prompt,
-                    capture_output=True,
-                    text=True,
-                    timeout=self.timeout_seconds,
-                    check=False,
-                    env=codex_subprocess_environment(),
-                )
-                if completed.returncode != 0 or not output_path.is_file():
-                    raise _semantic_need(
-                        capability,
-                        "The semantic Workshop Manager could not complete this routing pass.",
-                    )
-                payload = json.loads(output_path.read_text(encoding="utf-8"))
+                if self.engine == "grok":
+                    payload = self._invoke_grok(root, prompt, schema)
+                elif self.engine == "hermes":
+                    payload = self._invoke_hermes(root, prompt, schema)
+                else:
+                    payload = self._invoke_codex(root, prompt, schema, capability)
         except WaitingFor:
             raise
         except (OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError):
             raise _semantic_need(
                 capability,
                 "The semantic Workshop Manager returned no valid structured decision.",
+                engine=self.engine,
             )
         if not isinstance(payload, dict):
             raise _semantic_need(
                 capability,
                 "The semantic Workshop Manager returned no valid structured decision.",
+                engine=self.engine,
             )
         return payload
+
+    def _invoke_codex(
+        self, root: Path, prompt: str, schema: Mapping[str, Any], capability: str
+    ) -> Mapping[str, Any]:
+        schema_path = root / "output.schema.json"
+        output_path = root / "output.json"
+        schema_path.write_text(json.dumps(schema, sort_keys=True), encoding="utf-8")
+        command = [
+            self.binary,
+            "exec",
+            "--ephemeral",
+            "--ignore-rules",
+            "--skip-git-repo-check",
+            "--sandbox",
+            "read-only",
+            "--color",
+            "never",
+            "--config",
+            'model_reasoning_effort="low"',
+            "--output-schema",
+            str(schema_path),
+            "--output-last-message",
+            str(output_path),
+            "-C",
+            str(root),
+            "--model",
+            self.model,
+            "-",
+        ]
+        completed = self._runner(
+            command,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout_seconds,
+            check=False,
+            env=self._cli_env(),
+        )
+        if completed.returncode != 0 or not output_path.is_file():
+            raise _semantic_need(
+                capability,
+                "The semantic Workshop Manager could not complete this routing pass.",
+                engine=self.engine,
+            )
+        return json.loads(output_path.read_text(encoding="utf-8"))
+
+    def _invoke_grok(
+        self, root: Path, prompt: str, schema: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        prompt_path = root / "prompt.txt"
+        prompt_path.write_text(prompt, encoding="utf-8")
+        command = [
+            self.binary,
+            "--prompt-file",
+            str(prompt_path),
+            "--json-schema",
+            json.dumps(schema, sort_keys=True, separators=(",", ":")),
+            "--output-format",
+            "json",
+            "--permission-mode",
+            "dontAsk",
+            "--cwd",
+            str(root),
+            "--disable-web-search",
+            "--no-plan",
+            "--no-subagents",
+            "--verbatim",
+            "--reasoning-effort",
+            "low",
+            "--max-turns",
+            "1",
+            "-m",
+            self.model,
+        ]
+        completed = self._runner(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout_seconds,
+            check=False,
+            env=self._cli_env(),
+        )
+        if completed.returncode != 0:
+            raise ValueError("grok routing pass failed")
+        envelope = json.loads(completed.stdout)
+        if isinstance(envelope, dict) and isinstance(envelope.get("structuredOutput"), dict):
+            return envelope["structuredOutput"]
+        if isinstance(envelope, dict) and isinstance(envelope.get("text"), str):
+            return json.loads(envelope["text"])
+        if isinstance(envelope, dict):
+            return envelope
+        raise ValueError("grok routing payload is not an object")
+
+    def _invoke_hermes(
+        self, root: Path, prompt: str, schema: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        from workshop.runtime.hermes import _decode_json_object
+
+        query_path = root / "query.txt"
+        query_path.write_text(
+            "Return only JSON matching this schema. No markdown.\nSCHEMA:\n"
+            + json.dumps(schema, sort_keys=True)
+            + "\n\nPROMPT:\n"
+            + prompt,
+            encoding="utf-8",
+        )
+        command = [
+            self.binary,
+            "chat",
+            "--query-file",
+            str(query_path),
+            "-Q",
+            "--ignore-rules",
+            "--yolo",
+            "--provider",
+            os.environ.get("WORKSHOP_HERMES_PROVIDER") or DEFAULT_HERMES_PROVIDER,
+            "-m",
+            self.model,
+            "--reasoning",
+            "low",
+            "--in",
+            str(root),
+        ]
+        completed = self._runner(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout_seconds,
+            check=False,
+            env=self._cli_env(),
+        )
+        if completed.returncode != 0:
+            raise ValueError("hermes routing pass failed")
+        return _decode_json_object(completed.stdout or "")
 
     def retrieve(self, context: RoutingContext):
         routable_count = sum(1 for card in context.catalog.cards if card.routable)

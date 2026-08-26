@@ -30,6 +30,7 @@ from workshop.make import (
     validate_cad_design_action,
 )
 from workshop.runtime.codex import CodexInvocationError, CodexStructuredRunner
+from workshop.runtime.engine import structured_runner
 from workshop.errors import ContractError
 from workshop.runtime.execution import minimal_tool_environment
 from workshop.make import Feedback
@@ -2774,8 +2775,9 @@ class LaneAwarePlaytester:
             raise ValueError("Playtest goal must be an integer from 1 to 100")
         if type(game_count) is not int or game_count < DEFAULT_GAME_COUNT:
             raise ValueError("invented-game Playtest requires at least 1,000 games")
-        self.evaluator = evaluator or CodexStructuredRunner(
-            model=os.environ.get("WORKSHOP_PLAYTEST_MODEL", DEFAULT_PLAYTEST_MODEL),
+        self.evaluator = evaluator or structured_runner(
+            model=os.environ.get("WORKSHOP_PLAYTEST_MODEL"),
+            default_codex_model=DEFAULT_PLAYTEST_MODEL,
             reasoning_effort="low",
         )
         self.game_simulator = game_simulator

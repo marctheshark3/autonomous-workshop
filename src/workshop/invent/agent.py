@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Protocol, Sequence, Tuple
 
 from workshop.runtime.codex import CodexInvocationError, CodexStructuredRunner
+from workshop.runtime.engine import structured_runner
 from workshop.errors import ContractError
 from workshop.invent.contracts import InventContext, Invented
 from workshop.outcomes import Need, WaitingFor
@@ -875,8 +876,9 @@ class CodexNativeResearchProvider:
     provider_version = "1.0.0"
 
     def __init__(self, *, researcher: Optional[Any] = None) -> None:
-        self.researcher = researcher or CodexStructuredRunner(
-            model=os.environ.get("WORKSHOP_RESEARCH_MODEL", DEFAULT_RESEARCH_MODEL),
+        self.researcher = researcher or structured_runner(
+            model=os.environ.get("WORKSHOP_RESEARCH_MODEL"),
+            default_codex_model=DEFAULT_RESEARCH_MODEL,
             reasoning_effort="low",
         )
         if not callable(getattr(self.researcher, "invoke", None)):
@@ -2011,12 +2013,14 @@ class CodexInventor:
         goal: int = DEFAULT_INVENT_GOAL,
         max_steps: int = DEFAULT_INVENT_STEPS,
     ) -> None:
-        self.creator = creator or CodexStructuredRunner(
-            model=os.environ.get("WORKSHOP_INVENT_MODEL", DEFAULT_INVENT_MODEL),
+        self.creator = creator or structured_runner(
+            model=os.environ.get("WORKSHOP_INVENT_MODEL"),
+            default_codex_model=DEFAULT_INVENT_MODEL,
             reasoning_effort="low",
         )
-        self.evaluator = evaluator or CodexStructuredRunner(
-            model=os.environ.get("WORKSHOP_REWARD_MODEL", DEFAULT_REWARD_MODEL),
+        self.evaluator = evaluator or structured_runner(
+            model=os.environ.get("WORKSHOP_REWARD_MODEL"),
+            default_codex_model=DEFAULT_REWARD_MODEL,
             reasoning_effort="low",
         )
         if research_provider is _DEFAULT_RESEARCH_PROVIDER:

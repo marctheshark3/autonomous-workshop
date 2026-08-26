@@ -11,6 +11,7 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 from workshop.artifacts.core import ArtifactManifest, build_artifact_manifest
 from workshop.product import attribute_product_description
 from workshop.runtime.codex import CodexInvocationError, CodexStructuredRunner
+from workshop.runtime.engine import structured_runner
 from workshop.errors import AmbiguousEffectError, ContractError, EffectError
 from workshop.instructions.service import (
     InstructionsSiteWriter,
@@ -160,17 +161,14 @@ class RewardedInstructions:
         if site_writer is not None and not callable(site_writer):
             raise ContractError("Instructions site writer must be callable")
         self.site_writer = site_writer
-        self.creator = creator or CodexStructuredRunner(
-            model=os.environ.get(
-                "WORKSHOP_INSTRUCTIONS_MODEL", DEFAULT_INSTRUCTIONS_CREATOR_MODEL
-            ),
+        self.creator = creator or structured_runner(
+            model=os.environ.get("WORKSHOP_INSTRUCTIONS_MODEL"),
+            default_codex_model=DEFAULT_INSTRUCTIONS_CREATOR_MODEL,
             reasoning_effort="medium",
         )
-        self.evaluator = evaluator or CodexStructuredRunner(
-            model=os.environ.get(
-                "WORKSHOP_INSTRUCTIONS_REWARD_MODEL",
-                DEFAULT_INSTRUCTIONS_REWARD_MODEL,
-            ),
+        self.evaluator = evaluator or structured_runner(
+            model=os.environ.get("WORKSHOP_INSTRUCTIONS_REWARD_MODEL"),
+            default_codex_model=DEFAULT_INSTRUCTIONS_REWARD_MODEL,
             reasoning_effort="low",
         )
         if type(goal) is not int or not 1 <= goal <= 100:
