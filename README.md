@@ -118,11 +118,37 @@ Rainward Sun archive, each as an independent run. See [the correction-run contra
 git clone https://github.com/autonomous-ai/autonomous-workshop.git
 cd autonomous-workshop
 
+uv python install 3.14
+uv sync --frozen --python 3.14
 codex login
-uv run workshop doctor
+uv run --frozen workshop doctor
 ```
 
-When an Inventor is not yet connected, Workshop opens [Connect Inventor](https://www.autonomous.ai/toys/inventor/login) during `create` or `start`. Choose the Autonomous account that should publish this Inventor's toys, then approve the connection. Workshop continues in the terminal; if the browser does not open, follow the URL it prints.
+Start with one local build from your own brief:
+
+```bash
+uv run --frozen workshop wish "A small one-piece tactile desk pebble" \
+  --inventor halden-detent --workflow spark --agent codex \
+  --max-tokens 10000000 --no-publish
+```
+
+This uses your model account and seals the result locally with `unreleased`
+status. It needs no Factory account. `--no-publish` also works with `fix` and
+every `start` input path, including an entire repeating loop. To let an Inventor
+dream and build just one local idea:
+
+```bash
+uv run --frozen workshop start pico-press --once --no-publish --max-tokens 10000000
+```
+
+Use the printed product id with `workshop status <product-id>` or
+`workshop resume <product-id>`; the local restriction and consumed token budget
+survive resume. The receipt identifies the archived toy and its STEP files.
+Python 3.14 is needed for parallel motion verification. On Linux, use a
+Bubblewrap build supporting `--argv0`; see [local setup and review](docs/LOCAL_SETUP.md)
+for the sandbox dependency and the limits of `doctor`.
+
+When an Inventor is not yet connected, Workshop opens [Connect Inventor](https://www.autonomous.ai/toys/inventor/login) during `create` or a publishing `start`. Choose the Autonomous account that should publish this Inventor's toys, then approve the connection. Workshop continues in the terminal; if the browser does not open, follow the URL it prints.
 
 Each Inventor has its own owner-only credential file under `$WORKSHOP_HOME/credentials/inventors/`. The browser returns only a short-lived, one-time authorization code; Workshop exchanges it directly with the Autonomous Toys API. Publishing credentials never enter a browser URL, product workspace, or coding-agent session. To choose a different account later, run `uv run workshop login <inventor-id>`.
 
@@ -179,7 +205,7 @@ acceptance is still in progress.
 `start <inventor> --wish "..."` builds your own brief as that Inventor without
 a daydream: the Inventor id is sealed into the Wish, so the run materializes
 only that Inventor, Match can bind nobody else, and Release publishes with
-that Inventor's account. `--ref` attaches up to eight reference images (PNG,
+that Inventor's account. `--ref` attaches up to 99 reference images (PNG,
 JPEG, or WebP) to a `wish` or a `start --wish`, each a local file or an
 `http(s)` link that is downloaded once at Wish time and sealed by its bytes;
 `--max-rounds` sets the legacy Invent-Make round budget (not a spending limit
@@ -211,7 +237,7 @@ uv run workshop resume <product-id>
 Codex Astra also supports `--effort ultra`, passed unchanged to native Codex.
 Ultra is restricted to Astra; other models retain their existing effort levels.
 
-`start` and `wish` accept `--max-tokens N` up to **200,000,000**, default **30,000,000** per Codex
+`start` and `wish` accept `--max-tokens N` up to **1,000,000,000**, default **30,000,000** per Codex
 product. Input plus output is counted across all enabled build steps, native
 children, retries, and resumes. Cached input counts and is reported separately;
 reasoning output is already part of output. `start` gives each product its own
