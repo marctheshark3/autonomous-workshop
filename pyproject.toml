@@ -23,6 +23,9 @@ dependencies = [
   "reportlab>=4.4",
 ]
 
+[dependency-groups]
+dev = ["pip>=25,<27", "pytest>=8.4,<10"]
+
 [project.urls]
 Homepage = "https://github.com/autonomous-ai/autonomous-workshop"
 Repository = "https://github.com/autonomous-ai/autonomous-workshop"

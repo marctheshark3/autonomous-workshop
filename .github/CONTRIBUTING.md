@@ -11,7 +11,8 @@ workflow, lifecycle contracts, or product-run instructions. Read
 
 ## Set up the repository
 
-Workshop requires Python 3.11 or newer. A signed-in Codex CLI is needed for a
+Workshop requires Python 3.11 or newer; use Python 3.14 for the complete test
+suite and parallel motion verification. A signed-in Codex CLI is needed for a
 real Wish, but repository tests are deterministic and need no model account,
 Factory credential, network service, CAD service, or printer.
 
@@ -19,7 +20,8 @@ Factory credential, network service, CAD service, or printer.
 git clone https://github.com/<your-user>/autonomous-workshop.git
 cd autonomous-workshop
 git switch -c inventor/ada-deduction-games
-uv sync
+uv python install 3.14
+uv sync --frozen --python 3.14
 ```
 
 Keep a pull request focused on one Inventor or one coherent Workshop contract.
@@ -141,13 +143,13 @@ uv run workshop check inventors/ada-deduction-games
 Run repository gates from the root:
 
 ```bash
-PYTHONPATH=src python -m unittest discover -s tests -t . -p 'test_*.py' -v
-PYTHONPATH=src python -m cli skills list
-PYTHONPATH=src python -m cli schemas list
-python .agents/product-run/.agents/skills/autonomous-workshop/scripts/stage_proposal.py --help
-python tools/verify_skill_locks.py
-python tools/scan_secrets.py
-python tests/packaging/installed_wheel_cli_acceptance.py
+uv run --frozen python -m pytest tests
+uv run --frozen workshop skills list
+uv run --frozen workshop schemas list
+uv run --frozen python .agents/product-run/.agents/skills/autonomous-workshop/scripts/stage_proposal.py --help
+uv run --frozen python tools/verify_skill_locks.py
+uv run --frozen python tools/scan_secrets.py
+uv run --frozen python tests/packaging/installed_wheel_cli_acceptance.py
 git diff --check
 ```
 

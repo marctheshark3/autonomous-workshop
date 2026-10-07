@@ -209,6 +209,7 @@ class RunLogStepTests(unittest.TestCase):
 
 
 class RunLogKeyRedactionTests(unittest.TestCase):
+    # Construct synthetic keys at runtime so static scans can still flag real secrets.
     def test_refuses_field_named_like_a_credential(self) -> None:
         with _tmp_dir() as tmp:
             log = RL.RunLog.start(
@@ -220,7 +221,7 @@ class RunLogKeyRedactionTests(unittest.TestCase):
                     personality="p",
                     contract_path="c",
                     preview_path="h",
-                    api_key="sk-or-v1-abcdef",  # type: ignore[call-arg]
+                    api_key="sk-" + "or-v1-" + "0" * 64,  # type: ignore[call-arg]
                 )
 
     def test_refuses_value_shaped_like_an_openrouter_key(self) -> None:
@@ -232,7 +233,7 @@ class RunLogKeyRedactionTests(unittest.TestCase):
                 log.gate_rejected(
                     agent_id="agent-1",
                     personality="p",
-                    reasons=["sk-or-v1-0123456789abcdef0123456789abcdef"],
+                    reasons=["sk-" + "or-v1-" + "0" * 64],
                     replacement_personality=None,
                 )
 
