@@ -1265,14 +1265,25 @@ def _design_vault(run_root: Path):
     The host writes ``VAULT.json`` before every Invent, Make, and Playtest
     phase; a stage without one finalizes without vault rules.  A snapshot
     that is present but unreadable, or whose tool is missing, is a broken run
-    tree, not a legacy run.
+    tree, not a legacy run. Linux may expose an absent protected path as an
+    empty file; only a valid host stage without a vault binding permits that
+    placeholder to mean absence.
     """
 
     vault_path = run_root / RUN_VAULT_PATH
     tool_path = run_root / RUN_VAULT_TOOL_PATH
     if not vault_path.is_file() and not vault_path.is_symlink():
         return None
-    if vault_path.is_symlink() or tool_path.is_symlink() or not tool_path.is_file():
+    if vault_path.is_symlink():
+        raise ProposalError("design vault snapshot or tool is missing from the run")
+    if vault_path.stat().st_size == 0:
+        stage, _, _ = _read_json(
+            run_root, "STAGE.json", "STAGE.json", maximum=MAX_STAGE_BYTES
+        )
+        stage = _load_stage(run_root, stage.get("stage"))
+        if stage["inputs"].get("design_vault") is None:
+            return None
+    if tool_path.is_symlink() or not tool_path.is_file():
         raise ProposalError("design vault snapshot or tool is missing from the run")
     import importlib.util
 

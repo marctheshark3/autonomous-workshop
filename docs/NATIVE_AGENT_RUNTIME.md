@@ -659,6 +659,13 @@ Provider timeouts and recognized transport interruptions also stop an
 invocation after two consecutive recoverable failures; an explicit resume
 starts a fresh two-failure window.
 
+Linux can expose an absent protected `VAULT.json` as an empty file inside the
+sandbox. Current finalizers treat that placeholder as absence only after
+validating the read-only `STAGE.json` and finding no `design_vault` binding.
+A bound empty snapshot, symlink or corrupt nonempty snapshot still fails.
+Frozen finalizers retain their bytes; an affected run can acquire this fix
+through an explicit, previewed `resume --refresh-tools` operation.
+
 For current Make and Playtest checkpoints, an otherwise bound proposal whose
 agent-authored contract or artifact tree cannot be safely reopened is not
 accepted and does not terminate the run. The host quarantines the exact
