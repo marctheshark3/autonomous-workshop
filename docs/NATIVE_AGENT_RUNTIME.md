@@ -306,11 +306,13 @@ original session and publication remain separate. Current Make checks and blind
 review apply to the corrected output. See
 [ADR 0065](adr/0065-published-toy-correction-runs.md) for the intake contract.
 
-`--no-publish` freezes one restriction on a new `wish` or `fix` run: Release
+`--no-publish` freezes one restriction on a new `wish`, `fix` or `start` run: Release
 seals and projects the toy locally with `unreleased` publication status and
 performs no Factory effect, credential read or ledger write at all. A resume
 can neither add nor drop it. That makes a chain of single-change corrections
 possible where only the last run publishes.
+Local `start` skips publishing credential discovery and login, including for
+saved ideas and typed Wishes, and preserves the flag for every build in a loop.
 
 `workshop resume <product-id>` resumes the recorded session UUID in the same toy
 project. Session memory is useful continuity, but the durable checkpoint,
@@ -887,7 +889,16 @@ launched Codex executable are readable, and the surrounding checkout and
 sibling toys stay denied. The Codex grant is file-only and lets its built-in
 sandboxed filesystem helper re-execute the already trusted binary for native
 file tools such as `apply_patch` and `view_image`; it does not expose
-`$CODEX_HOME` or the Codex package directory. The immutable project-root
+`$CODEX_HOME` or the Codex package directory. For an official npm installation,
+both the JS launcher and the native platform executable it starts are bound
+as individual files. Linux omits separate bind mounts for Python symlinks
+already exposed by a granted real directory and an explicitly granted target;
+those aliases remain in the runtime identity binding. Resume recognizes only
+the exact preceding policies, preserving the native session and refusing
+unrelated permission drift. Linux hosts with Bubblewrap older than 0.9 must
+select a build supporting `--argv0`, such as Codex's bundled Bubblewrap, on PATH;
+the legacy helper alias in Codex home remains inaccessible.
+The immutable project-root
 marker also prevents builder `AGENTS.md` inheritance, and dotenv files remain
 denied. Direct command networking uses Codex's managed proxy in limited mode
 for the Step.parts API and site, GitHub media, and catalog Vercel-blob asset
