@@ -2256,7 +2256,7 @@ class DoctorTest(unittest.TestCase):
 
         def run(command, **kwargs):
             calls.append((command, kwargs))
-            stdout = "codex-cli 0.145.0" if command[-1] == "--version" else "ok"
+            stdout = "codex-cli 0.153.4" if command[-1] == "--version" else "ok"
             return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
 
         environment = {
@@ -2281,20 +2281,20 @@ class DoctorTest(unittest.TestCase):
             self.assertNotIn("AWS_SECRET_ACCESS_KEY", kwargs["env"])
 
     def test_old_codex_cannot_pass_the_native_runtime_check(self):
-        def run(command, **unused_kwargs):
-            return subprocess.CompletedProcess(
-                command, 0, stdout="codex-cli 0.144.9", stderr=""
-            )
-
-        with mock.patch.dict(
-            os.environ,
-            {"WORKSHOP_CODEX_BIN": "/opt/codex", "PATH": "/usr/bin"},
-            clear=True,
-        ), mock.patch("cli.main.subprocess.run", side_effect=run):
-            check = cli_main._doctor_codex()
-        self.assertEqual(check["status"], "needs-attention")
-        self.assertIn("goals, subagents, and isolation", check["detail"])
-        self.assertIn("0.145.0", check["next"])
+        for version in ("0.144.9", "0.145.0", "0.150.0", "0.153.3"):
+            with self.subTest(version=version), mock.patch.dict(
+                os.environ,
+                {"WORKSHOP_CODEX_BIN": "/opt/codex", "PATH": "/usr/bin"},
+                clear=True,
+            ), mock.patch("cli.main.subprocess.run", return_value=(
+                subprocess.CompletedProcess([], 0, stdout="codex-cli " + version, stderr="")
+            )) as run:
+                check = cli_main._doctor_codex()
+            self.assertEqual(check["status"], "needs-attention")
+            self.assertIn("goals, subagents, and isolation", check["detail"])
+            self.assertIn("product token accounting", check["detail"])
+            self.assertIn("0.153.4", check["next"])
+            self.assertEqual(run.call_count, 1)
 
     def test_missing_factory_credentials_are_created_on_demand(self):
         ready = lambda name: {"name": name, "status": "ready", "detail": "ok"}

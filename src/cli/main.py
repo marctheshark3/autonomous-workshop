@@ -63,6 +63,10 @@ from workshop.runtime.codex import (
     MINIMUM_CODEX_NATIVE_RUNTIME_VERSION,
     codex_supports_native_workshop,
 )
+from workshop.runtime.codex_usage import (
+    MINIMUM_SUPPORTED_VERSION as MINIMUM_CODEX_USAGE_VERSION,
+    supports_rollout_usage_version,
+)
 from workshop.runtime.claude import claude_supports_native_workshop
 from workshop.runtime.grok import grok_supports_native_workshop
 from workshop.runtime.managers import (
@@ -1624,14 +1628,20 @@ def _doctor_codex() -> dict[str, str]:
         r"\d+(?:\.\d+){2}(?:[-+][A-Za-z0-9.-]+)?", output
     )
     cli_version = version_match.group(0) if version_match else ""
-    if not codex_supports_native_workshop(cli_version):
+    if not (
+        codex_supports_native_workshop(cli_version)
+        and supports_rollout_usage_version(cli_version)
+    ):
         minimum = ".".join(
-            str(part) for part in MINIMUM_CODEX_NATIVE_RUNTIME_VERSION
+            str(part) for part in max(
+                MINIMUM_CODEX_NATIVE_RUNTIME_VERSION, MINIMUM_CODEX_USAGE_VERSION,
+            )
         )
         return _check_record(
             "codex",
             "needs-attention",
-            "The Codex CLI is too old for Workshop goals, subagents, and isolation.",
+            "The Codex CLI is too old for Workshop goals, subagents, and isolation "
+            "with product token accounting.",
             next_step="Upgrade Codex CLI to %s or newer." % minimum,
         )
     try:
