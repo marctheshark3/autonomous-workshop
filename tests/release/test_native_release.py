@@ -1493,6 +1493,17 @@ class NativeReleaseTest(unittest.TestCase):
         readme = (target / "README.md").read_text(encoding="utf-8")
         self.assertIn("**Not published.**", readme)
         self.assertNotIn("View the verified public product page", readme)
+        self.assertIn("| Wish to locally sealed Release |", readme)
+        self.assertNotIn("Wish to verified publication", readme)
+        self.assertIn("Elapsed time ends at the locally sealed Release.", readme)
+        reproduce = next(
+            line for line in readme.splitlines()
+            if line.startswith("uv run workshop wish ")
+        )
+        self.assertIn("--no-publish", reproduce)
+        self.assertNotIn("--github", reproduce)
+        timing = json.loads((target / "TIMING.json").read_text(encoding="utf-8"))
+        self.assertEqual(timing["completion_boundary"], "locally sealed Release")
         self.assertTrue((target / "MANIFEST.json").is_file())
 
         # Same bytes again: an idempotent reprojection, not a hard collision.
@@ -1707,6 +1718,12 @@ class NativeReleaseTest(unittest.TestCase):
         self.assertIn("| Native Manager output tokens | 25 (measured; 1/1 turns measured) |", readme)
         self.assertIn("| Native Manager reasoning output tokens | 20 (measured; 1/1 turns measured) |", readme)
         self.assertIn("| Wish to verified publication | 1s", readme)
+        self.assertIn("Elapsed time ends at authenticated Factory public readback.", readme)
+        reproduce = next(
+            line for line in readme.splitlines()
+            if line.startswith("uv run workshop wish ")
+        )
+        self.assertNotIn("--no-publish", reproduce)
         self.assertIn(
             "| Make | 100 | 80 | 20 | 25 | 1 | measured; economics measured |",
             readme,
