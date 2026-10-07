@@ -54,7 +54,7 @@ native Release turn is added.
 
 ## Unreleased corrections
 
-`--no-publish` on `workshop wish` or `workshop fix` freezes one restriction in
+`--no-publish` on `workshop wish`, `workshop fix` or `workshop start` freezes one restriction in
 the run authorization (schema 4, `local_release_only`). Release still evaluates
 its whole gate: local package acceptance, the print-ready CAD guard and the
 sealed Release-to-Made binding. It then performs no Factory effect at all — no
@@ -68,6 +68,11 @@ The slug is derived from the exact sealed Release title and the timestamp from
 when the Release contract was sealed, so reprojecting the same run is
 idempotent rather than a collision. `--no-publish` and `--github` are mutually
 exclusive: an unreleased run has no public archive to push.
+
+`start --no-publish` skips publishing account lookup and login for all three
+input paths (daydream, saved idea and typed Wish), and forwards the restriction
+to every build in a repeating loop. This is CLI access to the existing host
+authorization contract; it adds no lifecycle or publication bypass.
 
 The restriction is frozen against everything the run itself can do. A resume can
 neither add nor drop it, no agent turn can reach it, and the Factory effect

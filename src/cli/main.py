@@ -1159,6 +1159,7 @@ def _start(args: argparse.Namespace) -> int:
     Inventor for the run and Release publishes with its credential.
     """
 
+    _reject_conflicting_publication_options(args)
     root = _inventor_source_root(args.root)
     runtime = manager_runtime_selection(
         args.agent,
@@ -1179,7 +1180,8 @@ def _start(args: argparse.Namespace) -> int:
     if args.max_failures < 1:
         raise WorkshopError("--max-failures must be at least 1")
     _require_routable_inventor(root, args.inventor)
-    _ensure_publishing_account(args.inventor, progress)
+    if not args.no_publish:
+        _ensure_publishing_account(args.inventor, progress)
     lease = acquire_loop(args.inventor)
     if not once:
         print(
@@ -1208,8 +1210,9 @@ def _start(args: argparse.Namespace) -> int:
                 lease.update(ideas=ideas)
                 print("Inventor: %s" % args.inventor, file=progress, flush=True)
                 print(
-                    "Sealing your brief as this run's Wish; %s builds and publishes it."
-                    % args.inventor,
+                    "Sealing your brief as this run's Wish; %s %s."
+                    % (args.inventor, "builds it locally" if args.no_publish
+                       else "builds and publishes it"),
                     file=progress,
                     flush=True,
                 )
@@ -1255,6 +1258,7 @@ def _start(args: argparse.Namespace) -> int:
                     workflow=workflow,
                     runtime=runtime,
                     github=args.github,
+                    no_publish=args.no_publish,
                     max_rounds=args.max_rounds,
                     max_tokens=args.max_tokens,
                     turn_minutes=args.turn_minutes,
@@ -2191,6 +2195,15 @@ def parser() -> argparse.ArgumentParser:
         "--once",
         action="store_true",
         help="dream and build one idea, then stop (default: loop until stopped)",
+    )
+    start.add_argument(
+        "--no-publish",
+        action="store_true",
+        help=(
+            "seal every toy locally as unreleased, without a Factory account "
+            "or listing; applies to --wish, --idea and every idea in the loop "
+            "(default: publish)"
+        ),
     )
     start.add_argument(
         "--max-ideas",
