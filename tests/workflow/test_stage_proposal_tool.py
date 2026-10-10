@@ -1126,6 +1126,44 @@ class StageProposalToolTest(unittest.TestCase):
         document, _ = self.assert_canonical_file("artifacts/invent/invented.json")
         self.assertEqual(document["schema_version"], 5)
 
+    def test_empty_sandbox_vault_placeholder_requires_a_stage_without_a_snapshot(self):
+        spec = importlib.util.spec_from_file_location("stage_proposal_empty_vault_test", TOOL)
+        tool = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tool)
+        self.materialize_vault()
+        snapshot = self.run_root / "VAULT.json"
+        snapshot.write_bytes(b"")
+        with self.assertRaises(tool.ProposalError):
+            tool._design_vault(self.run_root)  # No host stage can authorize omission.
+        self.write_stage("invent", {"assignment": self.assignment.to_dict()})
+        self.assertIsNone(tool._design_vault(self.run_root))
+        self.write_json("drafts/invent.json", self.invent_source(["hand-off", "single-token"]))
+        self.run_tool("invent", "--source", "drafts/invent.json")
+        self.assertTrue((self.run_root / "artifacts/invent/invented.json").is_file())
+        for binding in ({"path": "VAULT.json", "sha256": sha256(b"")}, {}):
+            with self.subTest(binding=binding):
+                self.write_stage("invent", {
+                    "assignment": self.assignment.to_dict(), "design_vault": binding,
+                })
+                with self.assertRaisesRegex(tool.ProposalError, "snapshot is invalid"):
+                    tool._design_vault(self.run_root)
+        self.write_stage("invent", {"assignment": self.assignment.to_dict(), "design_vault": None})
+        self.assertIsNone(tool._design_vault(self.run_root))
+        stage = self.run_root / "STAGE.json"
+        stage.chmod(0o600)
+        with self.assertRaisesRegex(tool.ProposalError, "read-only"):
+            tool._design_vault(self.run_root)
+        stage.chmod(0o400)
+        snapshot.write_bytes(b" ")
+        with self.assertRaisesRegex(tool.ProposalError, "snapshot is invalid"):
+            tool._design_vault(self.run_root)
+        snapshot.unlink()
+        target = self.run_root / "empty.json"
+        target.write_bytes(b"")
+        snapshot.symlink_to(target)
+        with self.assertRaisesRegex(tool.ProposalError, "missing from the run"):
+            tool._design_vault(self.run_root)
+
     def test_invent_rejects_contract_violations_with_a_named_rule(self):
         self.write_stage("invent", {"assignment": self.assignment.to_dict()})
         for name, mutate, pattern in CONCEPT_VIOLATIONS[:3] + CONCEPT_VIOLATIONS[-3:]:

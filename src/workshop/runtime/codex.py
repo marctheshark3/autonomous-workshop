@@ -7,6 +7,7 @@ import importlib
 import json
 import math
 import os
+import platform
 import re
 import signal
 import shutil
@@ -1126,7 +1127,8 @@ def _resolved_codex_binary(binary: Optional[str]) -> Optional[str]:
     On macOS a managed Seatbelt profile can execute an explicitly readable
     regular file but still reject re-execution through a symlink.  Codex's
     sandboxed filesystem helper uses the launch-time executable path, so launch
-    the root process through the canonical target and grant only that file.
+    the root process through the canonical target. An npm launcher also needs
+    its native helper bound by ``_codex_runtime_permission_identities``.
     """
 
     if binary is None:
@@ -1416,13 +1418,13 @@ def _python_runtime_permission_identities(
 def _codex_runtime_permission_identities(
     binary: str,
 ) -> tuple[_TrustedRuntimePathIdentity, ...]:
-    """Bind the exact executable used by Codex's filesystem helper.
+    """Bind the launcher and exact executable used by Codex's helpers.
 
     Native file tools such as freeform ``apply_patch`` and ``view_image`` use
     a sandboxed filesystem service that re-executes the running Codex binary
     in a hidden helper mode.  The helper needs read/execute access to that
-    already-trusted executable, never to the surrounding Codex home or package
-    directory.
+    already-trusted executable, including the native executable behind an npm
+    launcher, never to the surrounding Codex home or package directory.
     """
 
     try:
@@ -1441,7 +1443,65 @@ def _codex_runtime_permission_identities(
         raise CodexInvocationError(
             "Codex runtime executable is not a regular executable file"
         )
-    return (identity,)
+    native = _npm_codex_native_binary(resolved)
+    if native is None:
+        return (identity,)
+    native_identity = _trusted_runtime_path_identity(
+        native, label="Codex npm native executable",
+    )
+    if not stat.S_ISREG(native_identity.resolved_mode) or (
+        native_identity.resolved_mode & 0o111
+    ) == 0:
+        raise CodexInvocationError(
+            "Codex npm native executable is not a regular executable file"
+        )
+    return (identity, native_identity)
+
+
+def _npm_codex_native_binary(launcher: Path) -> Optional[Path]:
+    """Locate the native helper behind an official npm Codex launcher.
+
+    The JS entrypoint starts a platform executable. Granting the entrypoint
+    alone leaves native file and shell tools unable to re-execute that binary.
+    Follow Node's nearest-package lookup and the two shipped vendor layouts;
+    never grant a whole node_modules tree or the user's Codex home.
+    """
+    if launcher.name != "codex.js" or launcher.parent.name != "bin":
+        return None
+    package_root = launcher.parent.parent
+    try:
+        package = json.loads((package_root / "package.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(package, dict) or package.get("name") != "@openai/codex":
+        return None
+    targets = {
+        ("linux", "x86_64"): ("linux-x64", "x86_64-unknown-linux-musl"),
+        ("linux", "aarch64"): ("linux-arm64", "aarch64-unknown-linux-musl"),
+        ("darwin", "x86_64"): ("darwin-x64", "x86_64-apple-darwin"),
+        ("darwin", "arm64"): ("darwin-arm64", "aarch64-apple-darwin"),
+    }
+    target = targets.get((sys.platform, platform.machine().lower()))
+    if target is None:
+        raise CodexInvocationError(
+            "Cannot locate this npm Codex platform; set WORKSHOP_CODEX_BIN "
+            "to the native Codex executable"
+        )
+    suffix, triple = target
+    vendor = package_root / "vendor"
+    for ancestor in launcher.parents:
+        candidate = ancestor / "node_modules" / "@openai" / ("codex-" + suffix)
+        if (candidate / "package.json").is_file():
+            vendor = candidate / "vendor"
+            break
+    for relative in ("bin/codex", "codex/codex"):
+        candidate = vendor / triple / relative
+        if candidate.exists():
+            return candidate.resolve(strict=True)
+    raise CodexInvocationError(
+        "Codex npm native executable is missing; reinstall Codex or set "
+        "WORKSHOP_CODEX_BIN to the native Codex executable"
+    )
 
 
 def _source_checkout_boundary(run_root: Path) -> Optional[Path]:
@@ -1461,6 +1521,7 @@ def _permission_config_arguments(
     *,
     component_network: bool = True,
     component_network_domains: Optional[tuple[str, ...]] = None,
+    omit_covered_symlinks: bool = False,
 ) -> tuple[str, ...]:
     """Build one non-composable, exact-root Codex permission profile.
 
@@ -1490,18 +1551,27 @@ def _permission_config_arguments(
     checkout = _source_checkout_boundary(run_root)
     if checkout is not None:
         entries.append("%s=\"deny\"" % _toml_string(str(checkout)))
-    trusted_runtime_paths = sorted(
-        {
-            identity.path
-            for identity in (
-                *trusted_python_runtime_paths,
-                *trusted_codex_runtime_paths,
-            )
+    runtime_identities = (*trusted_python_runtime_paths, *trusted_codex_runtime_paths)
+    trusted_runtime_paths = {identity.path for identity in runtime_identities}
+    if omit_covered_symlinks:
+        directories = {
+            identity.path for identity in runtime_identities
+            if stat.S_ISDIR(identity.mode)
         }
-    )
+        # Linux's bind mounts follow a file symlink already exposed by a
+        # directory mount. Mounting that alias separately can fail before its
+        # target is mounted. The real directory and target already grant the
+        # same access; keep every alias in the identity binding, not the mounts.
+        trusted_runtime_paths -= {
+            identity.path for identity in runtime_identities
+            if stat.S_ISLNK(identity.mode)
+            and stat.S_ISREG(identity.resolved_mode)
+            and str(Path(identity.path).parent) in directories
+            and identity.resolved_path in trusted_runtime_paths
+        }
     entries.extend(
         "%s=\"read\"" % _toml_string(path)
-        for path in trusted_runtime_paths
+        for path in sorted(trusted_runtime_paths)
     )
     entries.extend(
         "%s=\"read\"" % _toml_string(str(run_root / relative))
@@ -1573,6 +1643,7 @@ def _codex_run_policy(run_root: Path, binary: str) -> _CodexRunPolicy:
             run_root,
             trusted_python_paths,
             trusted_codex_paths,
+            omit_covered_symlinks=sys.platform == "linux",
         ),
         trusted_python_runtime_paths=trusted_python_paths,
         trusted_codex_runtime_paths=trusted_codex_paths,
@@ -2599,9 +2670,22 @@ class CodexNativeSessionLauncher:
                 else None
             ),
         )
+        # Older npm runs bound only the JS launcher. Reproduce that exact
+        # policy for comparison while launching with its native helper bound.
+        policy_before_npm_helper = run_policy
+        if len(run_policy.trusted_codex_runtime_paths) > 1:
+            launcher_identity = run_policy.trusted_codex_runtime_paths[:1]
+            policy_before_npm_helper = replace(
+                run_policy,
+                trusted_codex_runtime_paths=launcher_identity,
+                permission_config_arguments=_permission_config_arguments(
+                    root, run_policy.trusted_python_runtime_paths,
+                    launcher_identity, omit_covered_symlinks=sys.platform == "linux",
+                ),
+            )
         policy_before_reference_images = _run_policy_before_reference_images(
             root,
-            run_policy,
+            policy_before_npm_helper,
         )
         policy_before_supplier_drawings = _run_policy_before_supplier_drawings(
             root,
@@ -2637,14 +2721,15 @@ class CodexNativeSessionLauncher:
         pre_framework_paths = _python_runtime_permission_identities(include_framework=False)
         pre_framework_policy = _CodexRunPolicy(
             permission_config_arguments=_permission_config_arguments(
-                root, pre_framework_paths, run_policy.trusted_codex_runtime_paths,
+                root, pre_framework_paths, policy_before_npm_helper.trusted_codex_runtime_paths,
             ),
             trusted_python_runtime_paths=pre_framework_paths,
-            trusted_codex_runtime_paths=run_policy.trusted_codex_runtime_paths,
+            trusted_codex_runtime_paths=policy_before_npm_helper.trusted_codex_runtime_paths,
             environment_allowlist=run_policy.environment_allowlist,
             environment_overrides=run_policy.environment_overrides,
         )
         predecessor_policies: list[tuple[_CodexRunPolicy, bool]] = [
+            (policy_before_npm_helper, True),
             (pre_framework_policy, True),
             (policy_before_reference_images, True),
             (policy_before_supplier_drawings, True),
@@ -2663,6 +2748,18 @@ class CodexNativeSessionLauncher:
                 False,
             )
         ]
+        if sys.platform == "linux":
+            # Reproduce only the exact shipped redundant-mount policy. Alias
+            # paths, symlink targets, inodes and all other permissions remain
+            # bound; this does not accept arbitrary same-version policy drift.
+            for policy in (run_policy, policy_before_npm_helper):
+                predecessor_policies.append((replace(
+                    policy,
+                    permission_config_arguments=_permission_config_arguments(
+                        root, policy.trusted_python_runtime_paths,
+                        policy.trusted_codex_runtime_paths,
+                    ),
+                ), True))
         if policy_before_venv_directory is not None:
             predecessor_policies.insert(
                 0,

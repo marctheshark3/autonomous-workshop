@@ -484,7 +484,8 @@ class NativeCommandTest(unittest.TestCase):
 
     def test_every_new_run_command_can_withhold_publication(self):
         """--no-publish is opt-in and is only forwarded when it is asked for."""
-        for command in (("wish", "a toy"), ("fix", "/tmp/toy", "--prompt", "repair the pin")):
+        for command in (("wish", "a toy"), ("start", "soren-voss"),
+                        ("fix", "/tmp/toy", "--prompt", "repair the pin")):
             with self.subTest(command=command):
                 self.assertFalse(parser().parse_args(command).no_publish)
                 self.assertTrue(parser().parse_args((*command, "--no-publish")).no_publish)
@@ -500,6 +501,7 @@ class NativeCommandTest(unittest.TestCase):
         # workspace exists beats announcing a run that cannot start.
         for command in (
             ("wish", "a moon", "--no-publish", "--github"),
+            ("start", "sample", "--once", "--no-publish", "--github"),
             ("fix", "/tmp/toy", "--prompt", "repair", "--no-publish", "--github"),
         ):
             with self.subTest(command=command), mock.patch(
@@ -1778,6 +1780,65 @@ class DaydreamCommandTest(unittest.TestCase):
         self.assertNotIn("Build it:", stdout.getvalue())
         self.assertIn("Wish: wish-", stdout.getvalue())
 
+    def test_start_local_builds_skip_credentials_for_every_input_path(self):
+        sealed = sample_sealed()
+        receipt = native_receipt(status="complete", stage="release")
+        receipt["publication"] = {
+            "status": "unreleased", "requested": False, "required": False,
+        }
+        for options in (("--once",), ("--idea", sealed.daydream_id),
+                        ("--wish", "a tactile desk pebble")):
+            stdout, stderr = StringIO(), StringIO()
+            with self.subTest(options=options), mock.patch(
+                "cli.main._publishing_account_ready",
+                side_effect=AssertionError("local build read credentials"),
+            ), mock.patch(
+                "cli.main._browser_login",
+                side_effect=AssertionError("local build requested login"),
+            ), mock.patch(
+                "cli.main.run_daydream", return_value=sealed,
+            ), mock.patch(
+                "cli.main.load_sealed_daydream", return_value=sealed,
+            ), mock.patch(
+                "cli.main.start_native_run", return_value=receipt,
+            ) as start, redirect_stdout(stdout), redirect_stderr(stderr):
+                result = main(("start", "sample", *options, "--no-publish", "--json"))
+            self.assertEqual(result, 0)
+            self.assertTrue(start.call_args.kwargs["local_release_only"])
+            self.assertFalse(start.call_args.kwargs["github_publish_requested"])
+            self.assertEqual(json.loads(stdout.getvalue())["run"]["publication"]["status"],
+                             "unreleased")
+            self.assertIn("Publication: disabled", stderr.getvalue())
+            self.assertNotIn("builds and publishes it", stderr.getvalue())
+
+    def test_start_local_loop_preserves_restriction_for_every_build(self):
+        receipt = native_receipt(status="complete", stage="release")
+        receipt["publication"] = {"status": "unreleased"}
+        with mock.patch(
+            "cli.main._ensure_publishing_account",
+            side_effect=AssertionError("local loop requested login"),
+        ), mock.patch(
+            "cli.main.run_daydream", return_value=sample_sealed(),
+        ), mock.patch(
+            "cli.main.start_native_run", return_value=receipt,
+        ) as start, redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            result = main(("start", "sample", "--max-ideas", "2", "--no-publish"))
+        self.assertEqual(result, 0)
+        self.assertEqual(start.call_count, 2)
+        for call in start.call_args_list:
+            self.assertTrue(call.kwargs["local_release_only"])
+
+    def test_start_conflicting_publication_options_fail_before_any_work(self):
+        with mock.patch("cli.main._ensure_publishing_account") as login, mock.patch(
+            "cli.main.acquire_loop",
+        ) as lease, mock.patch("cli.main.run_daydream") as dream, mock.patch(
+            "cli.main.start_native_run",
+        ) as start, redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            result = main(("start", "sample", "--no-publish", "--github"))
+        self.assertEqual(result, 2)
+        for operation in (login, lease, dream, start):
+            operation.assert_not_called()
+
     def test_start_with_a_typed_brief_pins_the_inventor_and_never_dreams(self):
         from PIL import Image
 
@@ -2195,7 +2256,7 @@ class DoctorTest(unittest.TestCase):
 
         def run(command, **kwargs):
             calls.append((command, kwargs))
-            stdout = "codex-cli 0.145.0" if command[-1] == "--version" else "ok"
+            stdout = "codex-cli 0.153.4" if command[-1] == "--version" else "ok"
             return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
 
         environment = {
@@ -2220,20 +2281,20 @@ class DoctorTest(unittest.TestCase):
             self.assertNotIn("AWS_SECRET_ACCESS_KEY", kwargs["env"])
 
     def test_old_codex_cannot_pass_the_native_runtime_check(self):
-        def run(command, **unused_kwargs):
-            return subprocess.CompletedProcess(
-                command, 0, stdout="codex-cli 0.144.9", stderr=""
-            )
-
-        with mock.patch.dict(
-            os.environ,
-            {"WORKSHOP_CODEX_BIN": "/opt/codex", "PATH": "/usr/bin"},
-            clear=True,
-        ), mock.patch("cli.main.subprocess.run", side_effect=run):
-            check = cli_main._doctor_codex()
-        self.assertEqual(check["status"], "needs-attention")
-        self.assertIn("goals, subagents, and isolation", check["detail"])
-        self.assertIn("0.145.0", check["next"])
+        for version in ("0.144.9", "0.145.0", "0.150.0", "0.153.3"):
+            with self.subTest(version=version), mock.patch.dict(
+                os.environ,
+                {"WORKSHOP_CODEX_BIN": "/opt/codex", "PATH": "/usr/bin"},
+                clear=True,
+            ), mock.patch("cli.main.subprocess.run", return_value=(
+                subprocess.CompletedProcess([], 0, stdout="codex-cli " + version, stderr="")
+            )) as run:
+                check = cli_main._doctor_codex()
+            self.assertEqual(check["status"], "needs-attention")
+            self.assertIn("goals, subagents, and isolation", check["detail"])
+            self.assertIn("product token accounting", check["detail"])
+            self.assertIn("0.153.4", check["next"])
+            self.assertEqual(run.call_count, 1)
 
     def test_missing_factory_credentials_are_created_on_demand(self):
         ready = lambda name: {"name": name, "status": "ready", "detail": "ok"}

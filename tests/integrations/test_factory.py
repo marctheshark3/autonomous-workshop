@@ -236,6 +236,7 @@ class FactoryTransport:
         self.manual_bytes = manual_bytes
         self.category_slug = category_slug
         self.public = False
+        self.title = "Verified Toy"
         self.calls = []
         self.imports = 0
         self.use_case = None
@@ -262,7 +263,7 @@ class FactoryTransport:
             "status": "public" if self.public else "draft",
             "project_url": "https://cdn.autonomous.ai/projects/history-1/",
             "origin": "import",
-            "title": "Verified Toy",
+            "title": self.title,
             "description": "An exact toy page authored before Factory import.",
             "tags": ["toy"],
             "category": (
@@ -300,6 +301,7 @@ class FactoryTransport:
                 return HttpResponse(
                     self.import_status, {}, b'{"error":"request rejected"}'
                 )
+            self.title = multipart_parts(headers, body)["title"][0].decode("utf-8")
             return HttpResponse(201, {}, json.dumps(self.design()).encode())
         if method == "GET" and url.endswith("/manual.pdf"):
             self.project_file_reads += 1
@@ -753,13 +755,15 @@ class FactoryReleaseTest(unittest.TestCase):
 
     def test_without_public_title_the_listing_is_byte_for_byte_unchanged(self):
         transport = FactoryTransport()
-        baseline_receipt = self.writer(FactoryTransport())(
+        baseline_transport = FactoryTransport()
+        baseline_receipt = self.writer(baseline_transport)(
             self.context, self.release, self.manifest
         )
         receipt = self.writer(transport)(self.context, self.release, self.manifest)
         self.assertEqual(receipt.details, baseline_receipt.details)
+        self.assertEqual(transport.imports, 0)  # Replay reconciles without another import.
         import_call = next(
-            call for call in transport.calls if call[1].endswith("/designs/import")
+            call for call in baseline_transport.calls if call[1].endswith("/designs/import")
         )
         parts = multipart_parts(import_call[2], import_call[3])
         self.assertEqual(parts["title"], [b"Verified Toy"])

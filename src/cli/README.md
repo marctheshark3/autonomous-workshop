@@ -30,7 +30,7 @@ readback. It does not start another native turn, rebuild CAD, review the product
 or require a new PDF. The durable publication checkpoint is still named
 `release`. Existing Forge/Quest and historical Release contracts remain readable.
 
-`workshop create inventor` and the first `workshop start <inventor-id>` open
+`workshop create inventor` and the first publishing `workshop start <inventor-id>` open
 `https://www.autonomous.ai/toys/inventor/login` when that Inventor is not yet
 connected. The CLI prints the complete authorization URL, opens the browser,
 and waits on a random-state, one-shot loopback callback. The callback receives
@@ -60,7 +60,14 @@ sources and cardinality: `workshop wish` makes one product from a human-provided
 idea, while `workshop start` continuously makes products from an Inventor's own
 ideas. `workshop start --once` is the bounded autonomous-idea variant.
 
-`start` and `wish` accept `--max-tokens N` (maximum `200000000`, default `30000000`) for the whole
+`wish`, `fix` and `start` accept `--no-publish`. A local `start` skips publishing
+credential lookup and browser login and forwards the frozen restriction to
+every build, whether the input is a daydream, saved idea or typed Wish.
+`start --once --no-publish` creates one local toy; a repeating `start` keeps
+every toy local. `--github` conflicts with `--no-publish` before any work starts.
+Release still seals the local archive; resume retains the restriction.
+
+`start` and `wish` accept `--max-tokens N` (maximum `1000000000`, default `30000000`) for the whole
 Codex product, including all build stages, native children and resumes. The
 separate Daydream session is excluded. All revisions and retries share that
 allowance without a native-turn or wall-clock execution cap.

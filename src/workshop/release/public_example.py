@@ -990,12 +990,15 @@ def _public_timing_summary(
     wish_id: Optional[str],
     completed_at: str,
     stage_timing_record: Optional[Mapping[str, Any]] = None,
+    *,
+    unreleased: bool = False,
 ) -> dict[str, Any]:
-    """Derive CLI Wish-to-publication time without adding private host state.
+    """Derive CLI Wish-to-completion time without adding private host state.
 
     The generated CLI Wish id contains its UTC intake second. The completion
-    boundary is the authenticated Factory public-readback receipt, not the
-    native agent's prose or its final turn. Programmatic and historical ids do
+    boundary is the authenticated Factory public-readback receipt, or the
+    sealed local Release when unreleased, never the native agent's prose or
+    its final turn. Programmatic and historical ids do
     not necessarily carry time, so they remain explicitly unavailable.
 
     Schema version 2 additionally carries a per-stage, per-operation timing
@@ -1036,7 +1039,10 @@ def _public_timing_summary(
         "started_at": started.isoformat().replace("+00:00", "Z"),
         "completed_at": completed_at,
         "elapsed_seconds": elapsed_seconds,
-        "completion_boundary": "authenticated Factory public readback",
+        "completion_boundary": (
+            "locally sealed Release" if unreleased
+            else "authenticated Factory public readback"
+        ),
         "breakdown": breakdown,
     }
 
@@ -1057,7 +1063,8 @@ def _format_elapsed_seconds(value: int) -> str:
 
 
 def _run_cost_markdown(
-    token_summary: Mapping[str, Any], timing_summary: Mapping[str, Any]
+    token_summary: Mapping[str, Any], timing_summary: Mapping[str, Any],
+    *, unreleased: bool = False,
 ) -> str:
     token_status = token_summary["status"]
     if token_status in ("measured", "partial"):
@@ -1187,14 +1194,13 @@ def _run_cost_markdown(
         "| Native Manager cache-write input tokens | %s |\n"
         "| Native Manager output tokens | %s |\n"
         "| Native Manager reasoning output tokens | %s |\n"
-        "| Wish to verified publication | %s |"
+        "| Wish to %s | %s |"
         "%s\n\n"
         "Input and output tokens are best-effort separate counts reported by "
         "the native Manager; they are not added together. Cached plus uncached "
         "input equals the input covered by the economic breakdown, while cache "
         "writes and reasoning are reported as subsets rather than added again. "
-        "No dollar cost is inferred. Elapsed time ends only after "
-        "authenticated Factory public readback.\n"
+        "No dollar cost is inferred. Elapsed time ends at %s.\n"
         % (
             input_value,
             cached_value,
@@ -1202,8 +1208,11 @@ def _run_cost_markdown(
             cache_write_value,
             output_value,
             reasoning_value,
+            "locally sealed Release" if unreleased else "verified publication",
             elapsed_value,
             stage_table,
+            "the locally sealed Release" if unreleased
+            else "authenticated Factory public readback",
         )
     )
 
@@ -1240,6 +1249,7 @@ def _reproduce_markdown(
     manager_model: Optional[str],
     manager_reasoning_effort: Optional[str],
     github_requested: bool,
+    unreleased: bool = False,
 ) -> str:
     wish = _read_json_object(staging / "wish" / "wish.json") or {}
     exact = wish.get("objective")
@@ -1258,7 +1268,9 @@ def _reproduce_markdown(
     if manager_reasoning_effort is not None:
         arguments.extend(("--effort", manager_reasoning_effort))
     arguments.extend(("--workflow", workflow))
-    if github_requested:
+    if unreleased:
+        arguments.append("--no-publish")
+    elif github_requested:
         arguments.append("--github")
     arguments.append(objective)
     command = " ".join(shlex.quote(part) for part in arguments)
@@ -1739,7 +1751,7 @@ def materialize_public_example(
         }
         public_token_summary = _public_token_summary(token_summary)
         public_timing_summary = _public_timing_summary(
-            wish_id, observed_at, stage_timing_record
+            wish_id, observed_at, stage_timing_record, unreleased=unreleased
         )
         _write_public_file(
             staging,
@@ -1887,7 +1899,9 @@ def materialize_public_example(
             factory_cell,
             _workflow_overview_markdown(staging),
             _creation_story_markdown(staging),
-            _run_cost_markdown(public_token_summary, public_timing_summary),
+            _run_cost_markdown(
+                public_token_summary, public_timing_summary, unreleased=unreleased
+            ),
             _reproduce_markdown(
                 staging,
                 summary=summary,
@@ -1898,6 +1912,7 @@ def materialize_public_example(
                     None if runtime is None else runtime.reasoning_effort
                 ),
                 github_requested=github_requested,
+                unreleased=unreleased,
             ),
             (
                 "- `invent/` — accepted Invent contract/source and sealed superseded attempts.\n"

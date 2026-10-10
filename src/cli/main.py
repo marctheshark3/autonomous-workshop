@@ -63,6 +63,10 @@ from workshop.runtime.codex import (
     MINIMUM_CODEX_NATIVE_RUNTIME_VERSION,
     codex_supports_native_workshop,
 )
+from workshop.runtime.codex_usage import (
+    MINIMUM_SUPPORTED_VERSION as MINIMUM_CODEX_USAGE_VERSION,
+    supports_rollout_usage_version,
+)
 from workshop.runtime.claude import claude_supports_native_workshop
 from workshop.runtime.grok import grok_supports_native_workshop
 from workshop.runtime.managers import (
@@ -1159,6 +1163,7 @@ def _start(args: argparse.Namespace) -> int:
     Inventor for the run and Release publishes with its credential.
     """
 
+    _reject_conflicting_publication_options(args)
     root = _inventor_source_root(args.root)
     runtime = manager_runtime_selection(
         args.agent,
@@ -1179,7 +1184,8 @@ def _start(args: argparse.Namespace) -> int:
     if args.max_failures < 1:
         raise WorkshopError("--max-failures must be at least 1")
     _require_routable_inventor(root, args.inventor)
-    _ensure_publishing_account(args.inventor, progress)
+    if not args.no_publish:
+        _ensure_publishing_account(args.inventor, progress)
     lease = acquire_loop(args.inventor)
     if not once:
         print(
@@ -1208,8 +1214,9 @@ def _start(args: argparse.Namespace) -> int:
                 lease.update(ideas=ideas)
                 print("Inventor: %s" % args.inventor, file=progress, flush=True)
                 print(
-                    "Sealing your brief as this run's Wish; %s builds and publishes it."
-                    % args.inventor,
+                    "Sealing your brief as this run's Wish; %s %s."
+                    % (args.inventor, "builds it locally" if args.no_publish
+                       else "builds and publishes it"),
                     file=progress,
                     flush=True,
                 )
@@ -1255,6 +1262,7 @@ def _start(args: argparse.Namespace) -> int:
                     workflow=workflow,
                     runtime=runtime,
                     github=args.github,
+                    no_publish=args.no_publish,
                     max_rounds=args.max_rounds,
                     max_tokens=args.max_tokens,
                     turn_minutes=args.turn_minutes,
@@ -1620,14 +1628,20 @@ def _doctor_codex() -> dict[str, str]:
         r"\d+(?:\.\d+){2}(?:[-+][A-Za-z0-9.-]+)?", output
     )
     cli_version = version_match.group(0) if version_match else ""
-    if not codex_supports_native_workshop(cli_version):
+    if not (
+        codex_supports_native_workshop(cli_version)
+        and supports_rollout_usage_version(cli_version)
+    ):
         minimum = ".".join(
-            str(part) for part in MINIMUM_CODEX_NATIVE_RUNTIME_VERSION
+            str(part) for part in max(
+                MINIMUM_CODEX_NATIVE_RUNTIME_VERSION, MINIMUM_CODEX_USAGE_VERSION,
+            )
         )
         return _check_record(
             "codex",
             "needs-attention",
-            "The Codex CLI is too old for Workshop goals, subagents, and isolation.",
+            "The Codex CLI is too old for Workshop goals, subagents, and isolation "
+            "with product token accounting.",
             next_step="Upgrade Codex CLI to %s or newer." % minimum,
         )
     try:
@@ -2191,6 +2205,15 @@ def parser() -> argparse.ArgumentParser:
         "--once",
         action="store_true",
         help="dream and build one idea, then stop (default: loop until stopped)",
+    )
+    start.add_argument(
+        "--no-publish",
+        action="store_true",
+        help=(
+            "seal every toy locally as unreleased, without a Factory account "
+            "or listing; applies to --wish, --idea and every idea in the loop "
+            "(default: publish)"
+        ),
     )
     start.add_argument(
         "--max-ideas",

@@ -112,6 +112,14 @@ def permission_arguments(root, binary=TEST_CODEX_BINARY):
         runtime_paths.update(codex_runtime._python_framework_launcher_directories())
         runtime_paths.update(codex_runtime._python_framework_dependencies())
     runtime_paths.add(Path(binary).resolve(strict=True))
+    if sys.platform == "linux":
+        runtime_paths = {
+            path for path in runtime_paths
+            if not (path.is_symlink() and path.is_file()
+                    and path.parent in runtime_paths
+                    and not path.parent.is_symlink()
+                    and path.resolve(strict=True) in runtime_paths)
+        }
     entries = [
         '":root"="deny"',
         '":minimal"="read"',
@@ -789,7 +797,11 @@ class CodexNativeSessionTest(unittest.TestCase):
                 'shell_environment_policy.filters={"OPENAI_*"="exclude","CODEX_API_KEY"="exclude"}',
                 command,
             )
-            self.assertEqual(filesystem[str(Path(sys.executable))], "read")
+            executable = Path(sys.executable)
+            if sys.platform == "linux" and executable.is_symlink() and str(executable.parent) in filesystem:
+                self.assertNotIn(str(executable), filesystem)
+            else:
+                self.assertEqual(filesystem[str(executable)], "read")
             self.assertEqual(
                 filesystem[str(Path(sys.executable).resolve(strict=True))], "read"
             )
@@ -1013,6 +1025,104 @@ class CodexNativeSessionTest(unittest.TestCase):
                         binary=str(binary),
                         cli_version="0.145.0",
                     )
+
+    @staticmethod
+    def npm_codex_fixture(root, *, layout="nested", executable="bin/codex"):
+        package = root / "node_modules/@openai/codex"
+        launcher = package / "bin/codex.js"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+        launcher.chmod(0o700)
+        (package / "package.json").write_text('{"name":"@openai/codex"}')
+        if layout == "nested":
+            dependency = package / "node_modules/@openai/codex-linux-x64"
+        elif layout == "hoisted":
+            dependency = package.parent / "codex-linux-x64"
+        else:
+            dependency = package
+        dependency.mkdir(parents=True, exist_ok=True)
+        (dependency / "package.json").write_text('{"name":"@openai/codex"}')
+        native = dependency / "vendor/x86_64-unknown-linux-musl" / executable
+        native.parent.mkdir(parents=True)
+        native.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        native.chmod(0o700)
+        return launcher, native
+
+    def test_npm_helper_grants_only_the_launcher_and_native_executable(self):
+        for layout in ("nested", "hoisted", "vendored"):
+            for executable in ("bin/codex", "codex/codex"):
+                with self.subTest(layout=layout, executable=executable), \
+                        tempfile.TemporaryDirectory() as temporary, \
+                        mock.patch.object(codex_runtime.sys, "platform", "linux"), \
+                        mock.patch.object(codex_runtime.platform, "machine", return_value="x86_64"):
+                    root = Path(temporary).resolve()
+                    launcher, native = self.npm_codex_fixture(root, layout=layout, executable=executable)
+                    policy = codex_runtime._codex_run_policy(root / "run", str(launcher))
+                    self.assertEqual(
+                        {item.path for item in policy.trusted_codex_runtime_paths},
+                        {str(launcher), str(native)},
+                    )
+                    override = next(value for value in policy.permission_config_arguments
+                                    if value.startswith("permissions.workshop-product-run.filesystem="))
+                    filesystem = tomllib.loads(override)["permissions"][CODEX_PERMISSION_PROFILE]["filesystem"]
+                    self.assertEqual(filesystem[str(native)], "read")
+                    self.assertEqual(filesystem[str(launcher)], "read")
+                    self.assertNotIn(str(native.parent), filesystem)
+                    self.assertNotIn(str(root / "node_modules"), filesystem)
+                    self.assertNotIn(str(Path.home() / ".codex"), filesystem)
+                    native.chmod(0o600)
+                    with self.assertRaisesRegex(CodexInvocationError, "regular executable"):
+                        codex_runtime._codex_run_policy(root / "run", str(launcher))
+                    native.unlink()
+                    with self.assertRaisesRegex(CodexInvocationError, "native executable is missing"):
+                        codex_runtime._codex_run_policy(root / "run", str(launcher))
+                    (launcher.parent.parent / "package.json").write_text('{"name":"unrelated"}')
+                    self.assertEqual(len(codex_runtime._codex_runtime_permission_identities(str(launcher))), 1)
+
+    def test_npm_resume_preserves_the_thread_and_rejects_unrelated_policy_drift(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(codex_runtime.sys, "platform", "linux"), \
+                mock.patch.object(codex_runtime.platform, "machine", return_value="x86_64"):
+            container = Path(temporary).resolve()
+            root = container / "run"
+            root.mkdir()
+            binary, native = self.npm_codex_fixture(container)
+            launcher, factory = self.launcher([
+                {"stdout": self.start_events()}, {"stdout": self.start_events()},
+            ], binary=str(binary))
+            started = self.start(launcher, root)
+            policy = codex_runtime._codex_run_policy(root, launcher.binary)
+            old_identities = policy.trusted_codex_runtime_paths[:1]
+            old_policy = replace(
+                policy, trusted_codex_runtime_paths=old_identities,
+                permission_config_arguments=codex_runtime._permission_config_arguments(
+                    root, policy.trusted_python_runtime_paths, old_identities,
+                ),
+            )
+            checkpoint = self.host_state(root) / "codex-session.json"
+            payload = json.loads(checkpoint.read_text())
+            payload["runtime_config_sha256"] = codex_runtime._runtime_config_sha256(
+                launcher.cli_version, launcher.model, launcher.reasoning_effort, old_policy,
+            )
+            payload["checkpoint_sha256"] = codex_runtime._sha256_json({
+                key: value for key, value in payload.items() if key != "checkpoint_sha256"
+            })
+            checkpoint.write_text(json.dumps(payload) + "\n")
+            resumed = self.resume(launcher, root)
+            self.assertEqual(resumed.binding.runtime_config_sha256, started.binding.runtime_config_sha256)
+            self.assertEqual(factory.calls[-1][0][-2], THREAD_ID)
+            self.assertIn(json.dumps(str(native)) + '="read"', " ".join(factory.calls[-1][0]))
+            altered = replace(old_policy, environment_overrides=(*old_policy.environment_overrides, ("EXTRA", "value")))
+            payload["runtime_config_sha256"] = codex_runtime._runtime_config_sha256(
+                launcher.cli_version, launcher.model, launcher.reasoning_effort, altered,
+            )
+            payload["checkpoint_sha256"] = codex_runtime._sha256_json({
+                key: value for key, value in payload.items() if key != "checkpoint_sha256"
+            })
+            checkpoint.write_text(json.dumps(payload) + "\n")
+            with self.assertRaises(ContractError):
+                self.resume(launcher, root)
+            self.assertEqual(len(factory.calls), 2)
 
     def test_activity_observer_receives_only_coarse_host_classes(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1817,6 +1927,110 @@ class CodexNativeSessionTest(unittest.TestCase):
                 resumed.binding.checkpoint_sha256,
                 payload["checkpoint_sha256"],
             )
+
+    def test_linux_venv_symlinks_are_bound_without_redundant_file_mounts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            container = Path(temporary).resolve()
+            root = container / "run"
+            root.mkdir()
+            bin_dir = container / "venv" / "bin"
+            bin_dir.mkdir(parents=True)
+            (bin_dir.parent / "pyvenv.cfg").write_text("home = /trusted/python\n")
+            executable = Path(sys.executable).resolve(strict=True)
+            (bin_dir / "python").symlink_to(executable)
+            (bin_dir / "python3").symlink_to("python")
+            with mock.patch.object(codex_runtime.sys, "executable", str(bin_dir / "python3")), \
+                    mock.patch.object(codex_runtime.sys, "platform", "linux"):
+                policy = codex_runtime._codex_run_policy(root, TEST_CODEX_BINARY)
+            override = next(value for value in policy.permission_config_arguments
+                            if value.startswith("permissions.workshop-product-run.filesystem="))
+            filesystem = tomllib.loads(override)["permissions"][CODEX_PERMISSION_PROFILE]["filesystem"]
+            self.assertEqual(filesystem[str(bin_dir)], "read")
+            self.assertEqual(filesystem[str(executable)], "read")
+            self.assertNotIn(str(bin_dir / "python"), filesystem)
+            self.assertNotIn(str(bin_dir / "python3"), filesystem)
+            self.assertNotIn(str(bin_dir.parent), filesystem)
+            self.assertEqual(filesystem[":root"], "deny")
+            self.assertEqual(filesystem[str(root.parent)], "deny")
+            # Dropping a duplicate mount must not drop identity/tamper checks.
+            identities = {item.path for item in policy.trusted_python_runtime_paths}
+            self.assertIn(str(bin_dir / "python"), identities)
+            self.assertIn(str(bin_dir / "python3"), identities)
+
+            # An alias without both its parent and its resolved target granted
+            # is not redundant, and the historical/macOS policy stays exact.
+            for missing in (str(bin_dir), str(executable)):
+                paths = tuple(item for item in policy.trusted_python_runtime_paths
+                              if item.path != missing)
+                arguments = codex_runtime._permission_config_arguments(
+                    root, paths, policy.trusted_codex_runtime_paths,
+                    omit_covered_symlinks=True,
+                )
+                override = next(value for value in arguments
+                                if value.startswith("permissions.workshop-product-run.filesystem="))
+                filesystem = tomllib.loads(override)["permissions"][CODEX_PERMISSION_PROFILE]["filesystem"]
+                self.assertEqual(filesystem[str(bin_dir / "python3")], "read")
+            arguments = codex_runtime._permission_config_arguments(
+                root, policy.trusted_python_runtime_paths, policy.trusted_codex_runtime_paths,
+            )
+            override = next(value for value in arguments
+                            if value.startswith("permissions.workshop-product-run.filesystem="))
+            filesystem = tomllib.loads(override)["permissions"][CODEX_PERMISSION_PROFILE]["filesystem"]
+            self.assertEqual(filesystem[str(bin_dir / "python3")], "read")
+
+    def test_resume_accepts_only_exact_linux_redundant_mount_predecessor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            container = Path(temporary).resolve()
+            root = container / "run"
+            root.mkdir()
+            bin_dir = container / "venv" / "bin"
+            bin_dir.mkdir(parents=True)
+            (bin_dir.parent / "pyvenv.cfg").write_text("home = /trusted/python\n")
+            (bin_dir / "python").symlink_to(Path(sys.executable).resolve(strict=True))
+            launcher, factory = self.launcher([
+                {"stdout": self.start_events()},
+                {"stdout": self.start_events(message="resumed")},
+            ])
+            with mock.patch.object(codex_runtime.sys, "executable", str(bin_dir / "python")), \
+                    mock.patch.object(codex_runtime.sys, "platform", "linux"):
+                started = self.start(launcher, root)
+                policy = codex_runtime._codex_run_policy(root, launcher.binary)
+                # This is the exact shipped policy, including the redundant mounts.
+                old_policy = replace(policy, permission_config_arguments=(
+                    codex_runtime._permission_config_arguments(
+                        root, policy.trusted_python_runtime_paths,
+                        policy.trusted_codex_runtime_paths,
+                    )
+                ))
+                old_hash = codex_runtime._runtime_config_sha256(
+                    launcher.cli_version, launcher.model, launcher.reasoning_effort, old_policy,
+                )
+                self.assertNotEqual(old_hash, started.binding.runtime_config_sha256)
+                checkpoint = self.host_state(root) / "codex-session.json"
+                payload = json.loads(checkpoint.read_text())
+                payload["runtime_config_sha256"] = old_hash
+                payload["checkpoint_sha256"] = codex_runtime._sha256_json({
+                    key: value for key, value in payload.items() if key != "checkpoint_sha256"
+                })
+                checkpoint.write_text(json.dumps(payload) + "\n")
+                resumed = self.resume(launcher, root)
+                self.assertEqual(resumed.binding.runtime_config_sha256,
+                                 started.binding.runtime_config_sha256)
+                self.assertEqual(factory.calls[-1][0][-2], THREAD_ID)
+                # An unrelated permission change cannot use this compatibility path.
+                altered = replace(old_policy, permission_config_arguments=(
+                    *old_policy.permission_config_arguments, "--config", 'web_search="disabled"',
+                ))
+                payload["runtime_config_sha256"] = codex_runtime._runtime_config_sha256(
+                    launcher.cli_version, launcher.model, launcher.reasoning_effort, altered,
+                )
+                payload["checkpoint_sha256"] = codex_runtime._sha256_json({
+                    key: value for key, value in payload.items() if key != "checkpoint_sha256"
+                })
+                checkpoint.write_text(json.dumps(payload) + "\n")
+                with self.assertRaises(ContractError):
+                    self.resume(launcher, root)
+                self.assertEqual(len(factory.calls), 2)
 
     def test_venv_policy_grants_launcher_directory_and_accepts_exact_predecessor(self):
         with tempfile.TemporaryDirectory() as temporary:
