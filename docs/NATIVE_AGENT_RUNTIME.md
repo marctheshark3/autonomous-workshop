@@ -1,37 +1,24 @@
 # Native coding-agent runtime
 
-This is the operating map for people and coding agents building Autonomous
-Workshop. It is authoritative together with
-[ADR 0012](adr/0012-codex-orchestrated-runtime.md),
-[ADR 0013](adr/0013-manual-first-release.md),
-[ADR 0014](adr/0014-terminal-published-release.md),
-[ADR 0015](adr/0015-defer-playtest.md),
-[ADR 0016](adr/0016-selectable-effort-routes.md),
-[ADR 0019](adr/0019-frozen-spark-economics-profile.md),
-[ADR 0020](adr/0020-signature-experience-evidence.md),
-[ADR 0021](adr/0021-compacted-spark-and-signature-review.md),
-[ADR 0022](adr/0022-blind-review-before-final-verification.md),
-[ADR 0023](adr/0023-bounded-spark-turn-and-semantic-review.md),
-[ADR 0031](adr/0031-bind-deep-profile-and-bound-first-proof.md),
-[ADR 0032](adr/0032-restore-make-depth-and-blindly-review-first-proof.md),
-[ADR 0036](adr/0036-reserve-proof-runway-for-product-bytes.md),
-[ADR 0037](adr/0037-raise-deep-compaction-ceiling.md),
-[ADR 0038](adr/0038-prove-product-states-and-bound-final-source.md),
-[ADR 0039](adr/0039-make-invent-recovery-a-source-handoff.md),
-[ADR 0040](adr/0040-make-proof-recovery-a-sealing-handoff.md),
-[ADR 0042](adr/0042-browser-issued-factory-credential.md),
-[ADR 0043](adr/0043-freeze-agent-model-and-effort.md),
-[ADR 0044](adr/0044-scope-component-cad-network.md),
-[ADR 0045](adr/0045-own-agent-selected-dependencies.md),
-[ADR 0046](adr/0046-budgeted-spark-twenty-minute-turns.md),
-[ADR 0049](adr/0049-product-wide-token-budget.md),
-[ADR 0050](adr/0050-structured-terminal-failure-diagnostics.md),
-[ADR 0060](adr/0060-make-round-visual-feedback-and-three-repairs.md),
-[ADR 0061](adr/0061-spark-make-owned-verification.md),
-[ADR 0063](adr/0063-spark-component-first-make.md), and the repository
-[agent instructions](../AGENTS.md). ADR 0013 supersedes ADR 0012's page-first
-Release details; ADR 0014 supersedes their optional-publication and
-executable-Deliver details; ADR 0016 supersedes ADR 0015's one fixed route.
+This is the current operating map for repository builders. Product runs follow
+separately materialized instructions; reading their skill is not authority to
+publish, manufacture or access credentials. Start with the relevant section and
+its owning contract, then follow only the decisions needed for the change.
+
+| Question | Current entry point |
+| --- | --- |
+| Builder versus product-run authority | [Agent contexts](#two-different-agent-contexts) and [runtime boundary](#runtime-boundary) |
+| New token-budget Spark, Make and publication | [Current policy](#current-token-budget-and-spark-handoff-policy), then the current Make skill and cited ADRs |
+| Starting/resuming a run or a documented correction | [Start and resume](#start-and-resume), including the explicit geometry/motion corrections below |
+| Native children and specialist identity | [Subagents and Inventors](#native-subagents-and-inventors) |
+| Stage proposals and deterministic acceptance | [`STAGE.json`](#the-stagejson-protocol), [finalizer](#run-local-proposal-finalizer) and [acceptance](#acceptance-bar) |
+| Credential-isolated publication | [Published Release](#terminal-published-release) |
+| Token budgets, older clocks and frozen recovery | [Budgets](#product-budgets-and-legacy-timeouts) and [profiles/recovery](#run-profiles-review-protocol-and-recovery-windows) |
+
+The [historical decision chain](agents/runtime-history.md) preserves the former
+introductory ADR list and builder amendment narrative. Consult it for a relevant
+historical decision or frozen protocol; do not treat superseded examples as
+current new-run policy. The sections below retain their existing contracts.
 
 ## Two different agent contexts
 
